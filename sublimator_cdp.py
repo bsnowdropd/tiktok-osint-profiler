@@ -1,15 +1,15 @@
 """
-sublimator_cdp.py — Глибокий LLM-аналіз (Qwen2.5) репостів з візуальним контекстом.
+sublimator_cdp.py — Deep LLM-analysis (Qwen2.5) of reposts with visual context.
 
-Зміни (рефакторинг):
-  - _safe_str → імпорт з utils (прибрано дублікат)
+Changes (refactoring):
+  - _safe_str → import from utils (duplicate removed)
   - init_db_structure → db_schema.get_connection()
-  - needed_columns розширено до повного списку (раніше пропускав visual_context, video_text)
+  - needed_columns expanded to the full list (previously skipped visual_context, video_text)
   - `visual_context IS NOT NULL` → `COALESCE(a.visual_context, '') != ''`
-    (ловить порожні рядки від Moondream, які раніше пропускалися)
-  - raw_result тепер зберігає summary (назва поля відповідає змісту)
-  - Конфігурація з config.py
-  - Retry-логіка для Ollama (3 спроби з паузою)
+    (catches empty strings from Moondream, which were skipped before)
+  - raw_result now stores summary (field name matches content)
+  - Configuration from config.py
+  - Retry-logic for Ollama (3 attempts with pause)
 """
 
 import json
@@ -26,21 +26,21 @@ from utils import safe_str
 logger = logging.getLogger(__name__)
 
 _RETRY_COUNT = 3
-_RETRY_DELAY = 5  # секунд між спробами
+_RETRY_DELAY = 5  # seconds between attempts
 
 
 def _call_ollama_with_retry(payload: dict, timeout: int) -> dict | None:
-    """Надсилає запит до Ollama з retry-логікою (3 спроби)."""
+    """Sends a request to Ollama with retry-logic (3 attempts)."""
     for attempt in range(1, _RETRY_COUNT + 1):
         try:
             res = requests.post(config.OLLAMA_URL, json=payload, timeout=timeout)
             if res.status_code == 200:
                 return res.json()
-            logger.warning("Ollama HTTP %d (спроба %d/%d)", res.status_code, attempt, _RETRY_COUNT)
+            logger.warning("Ollama HTTP %d (attempt %d/%d)", res.status_code, attempt, _RETRY_COUNT)
         except requests.exceptions.Timeout:
-            logger.warning("Ollama тайм-аут (спроба %d/%d)", attempt, _RETRY_COUNT)
+            logger.warning("Ollama timeout (attempt %d/%d)", attempt, _RETRY_COUNT)
         except Exception as exc:
-            logger.error("Ollama помилка (спроба %d/%d): %s", attempt, _RETRY_COUNT, exc)
+            logger.error("Ollama error (attempt %d/%d): %s", attempt, _RETRY_COUNT, exc)
 
         if attempt < _RETRY_COUNT:
             time.sleep(_RETRY_DELAY)
@@ -49,7 +49,7 @@ def _call_ollama_with_retry(payload: dict, timeout: int) -> dict | None:
 
 
 def analyze_repost(data: dict) -> tuple[str, dict] | None:
-    """Глибокий аналіз репосту: OCR + Moondream + Whisper + метадані → теги."""
+    """Deep repost analysis: OCR + Moondream + Whisper + metadata → tags."""
     v_id    = data.get("video_id", "unknown")
     desc    = data.get("description", "")
     sound   = data.get("sound", "")
@@ -59,30 +59,30 @@ def analyze_repost(data: dict) -> tuple[str, dict] | None:
     audio   = data.get("audio_text", "")
 
     prompt = f"""
-    Витягни СТИСЛІ ключові теги з репосту TikTok. 
-    Пріоритет: транскрипція > OCR > візуальний опис > текст/хештеги.
+    Extract BRIEF key tags from a TikTok repost. 
+    Priority: transcription > OCR > visual description > text/hashtags.
 
-    ВХІДНІ ДАНІ:
-    - Текст на екрані (OCR): {ocr}
-    - Візуальна хронологія (3 кадри): {visual}
-    - Голосова транскрипція: {audio}
-    - Опис/Хештеги: {desc}
-    - Назва звуку: {sound}
-    - Автор: @{author}
+    INPUT DATA:
+    - On-screen text (OCR): {ocr}
+    - Visual timeline (3 frames): {visual}
+    - Voice transcription: {audio}
+    - Description/Hashtags: {desc}
+    - Sound Name: {sound}
+    - Author: @{author}
 
-    ПРАВИЛА:
-    1. interests/hobbies: тільки прямі факти ("авто", "психологія", "геймінг").
-    2. music_taste: заповнювати ТІЛЬКИ якщо відео про музику/кліп.
-    3. relations: тільки якщо відео про стосунки/сім'ю/дружбу.
-    4. summary: 1–2 слова — суть відео ("мем", "туторіал", "влог").
+    RULES:
+    1. interests/hobbies: direct facts only ("cars", "psychology", "gaming").
+    2. music_taste: fill ONLY if the video is about music/clip.
+    3. relations: only if the video is about relationships/family/friendship.
+    4. summary: 1-2 words — essence of the video ("meme", "tutorial", "vlog").
 
-    JSON (українською):
+    JSON (in English):
     {{
-      "interests": "тег1, тег2",
-      "hobbies": "тег1",
+      "interests": "tag1, tag2",
+      "hobbies": "tag1",
       "relations": "",
       "music_taste": "",
-      "summary": "суть"
+      "summary": "essence"
     }}
     """
 
@@ -104,14 +104,14 @@ def analyze_repost(data: dict) -> tuple[str, dict] | None:
         parsed = json.loads(raw["response"])
         return v_id, parsed
     except (json.JSONDecodeError, KeyError) as exc:
-        logger.error("Не вдалося розпарсити відповідь Ollama для %s: %s", v_id, exc)
+        logger.error("Failed to parse Ollama response for %s: %s", v_id, exc)
         return None
 
 
 def main(max_workers: int = 3, db_path: str = "osint_unknown.db") -> None:
     conn = get_connection(db_path)
 
-    # COALESCE ловить NULL і "" — обидва випадки "відсутній контекст"
+    # COALESCE catches NULL and "" — both are "missing context" cases
     rows = conn.execute(
         """
         SELECT r.*, a.visual_context, a.video_text, a.audio_text
@@ -123,11 +123,11 @@ def main(max_workers: int = 3, db_path: str = "osint_unknown.db") -> None:
     ).fetchall()
 
     if not rows:
-        logger.info("Немає відео з візуальним контекстом для сублімації.")
+        logger.info("No videos with visual context for sublimation.")
         conn.close()
         return
 
-    logger.info("Сублімація %d відео у %d потоках...", len(rows), max_workers)
+    logger.info("Sublimation of %d videos in %d threads...", len(rows), max_workers)
     tasks = [dict(row) for row in rows]
     results: list[tuple[str, dict]] = []
 
@@ -137,12 +137,12 @@ def main(max_workers: int = 3, db_path: str = "osint_unknown.db") -> None:
                 results.append(res)
                 v_id, data = res
                 logger.info(
-                    "Сублімовано %s → %s | %s",
+                    "Sublimated %s → %s | %s",
                     v_id, data.get("interests", ""), data.get("summary", ""),
                 )
 
     if results:
-        logger.info("Збереження %d результатів...", len(results))
+        logger.info("Saving %d results...", len(results))
         for v_id, result in results:
             conn.execute(
                 """
@@ -168,7 +168,7 @@ def main(max_workers: int = 3, db_path: str = "osint_unknown.db") -> None:
         conn.commit()
 
     conn.close()
-    logger.info("Сублімація завершена!")
+    logger.info("Sublimation completed!")
 
 
 if __name__ == "__main__":

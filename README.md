@@ -1,6 +1,6 @@
 # TikTok OSINT Profiler 🕵️‍♂️
 
-> Автоматизований OSINT-конвеєр для цифрових розслідувань: **парсинг → аналіз відео → LLM-профайлінг → інтерактивний дашборд**
+> Automated OSINT pipeline for digital investigations: **parsing → video analysis → LLM profiling → interactive dashboard**
 
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://python.org)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.64-red.svg)](https://streamlit.io)
@@ -9,48 +9,48 @@
 
 ---
 
-## 🧭 Що робить цей проєкт
+## 🧭 What this project does
 
-Система збирає публічну активність TikTok-акаунту (репости), аналізує кожне відео через три незалежних канали (комп'ютерний зір, OCR, транскрипція аудіо), витягує семантичні патерни через локальну LLM та формує психологічне досьє. Всі результати доступні через веб-дашборд з інтерактивними графами.
+The system collects the public activity of a TikTok account (reposts), analyzes each video through three independent channels (computer vision, OCR, audio transcription), extracts semantic patterns using a local LLM, and creates a psychological dossier. All results are available via a web dashboard with interactive graphs.
 
 ```
 @target_user
      │
      ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  КРОК 1 · tiktok_parser_cdp.py                                  │
-│  Selenium CDP → збір метаданих репостів → SQLite (reposts)      │
+│  STEP 1 · tiktok_parser_cdp.py                                  │
+│  Selenium CDP → collect repost metadata → SQLite (reposts)      │
 └────────────────────────────┬────────────────────────────────────┘
                              │
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  КРОК 2 · vision_manager_3.py                                   │
-│  Розбивка відео на кадри → OCR (EasyOCR) → Moondream (опис)    │
-│  Fallback: ffmpeg якщо OpenCV не підтримує кодек               │
+│  STEP 2 · vision_manager_3.py                                   │
+│  Split video into frames → OCR (EasyOCR) → Moondream (desc)     │
+│  Fallback: ffmpeg if OpenCV doesn't support the codec           │
 └────────────────────────────┬────────────────────────────────────┘
                              │
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  КРОК 3 · audio_manager.py                                      │
-│  Whisper STT → транскрипція аудіодоріжок                        │
+│  STEP 3 · audio_manager.py                                      │
+│  Whisper STT → audio track transcription                        │
 └────────────────────────────┬────────────────────────────────────┘
                              │
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  КРОК 4 · sublimator_cdp.py                                     │
-│  Qwen2.5 → семантичні теги: інтереси / хобі / стосунки         │
+│  STEP 4 · sublimator_cdp.py                                     │
+│  Qwen2.5 → semantic tags: interests / hobbies / relationships   │
 └────────────────────────────┬────────────────────────────────────┘
                              │
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  КРОК 5 · analyzer_cdp.py                                       │
-│  Fallback: текстовий аналіз для відео без відеофайлів           │
+│  STEP 5 · analyzer_cdp.py                                       │
+│  Fallback: text analysis for videos without video files         │
 └────────────────────────────┬────────────────────────────────────┘
                              │
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  КРОК 6 · profiler_cdp.py                                       │
-│  Агрегація тегів → TXT-звіт + PDF-досьє                        │
+│  STEP 6 · profiler_cdp.py                                       │
+│  Tag aggregation → TXT report + PDF dossier                     │
 └─────────────────────────────────────────────────────────────────┘
                              │
                              ▼
@@ -61,58 +61,58 @@
 
 ---
 
-## 📁 Структура проєкту
+## 📁 Project Structure
 
 ```
 analyzer/
-├── app.py                    # Streamlit-дашборд (головний UI)
-├── run_pipeline.py           # Оркестратор конвеєра (кроки 1–6)
+├── app.py                    # Streamlit dashboard (main UI)
+├── run_pipeline.py           # Pipeline orchestrator (steps 1–6)
 │
-├── tiktok_parser_cdp.py      # Крок 1: CDP-парсер репостів
-├── vision_manager_3.py       # Крок 2: OCR + Moondream + ffmpeg fallback
-├── audio_manager.py          # Крок 3: Whisper STT
-├── sublimator_cdp.py         # Крок 4: Qwen2.5 семантичні теги
-├── analyzer_cdp.py           # Крок 5: fallback текстовий аналіз
-├── profiler_cdp.py           # Крок 6: генерація TXT/PDF-досьє
+├── tiktok_parser_cdp.py      # Step 1: CDP repost parser
+├── vision_manager_3.py       # Step 2: OCR + Moondream + ffmpeg fallback
+├── audio_manager.py          # Step 3: Whisper STT
+├── sublimator_cdp.py         # Step 4: Qwen2.5 semantic tags
+├── analyzer_cdp.py           # Step 5: fallback text analysis
+├── profiler_cdp.py           # Step 6: TXT/PDF dossier generation
 │
-├── cross_analyzer.py         # Крос-аналіз спільних репостів + семантика
-├── cross_platform_linker.py  # Пошук профілів на ін. платформах
-├── external_osint.py         # Maigret + Instaloader розвідка
-├── network_analyzer.py       # Аналіз мережі контактів (топ-5 + LLM)
-├── retro_profiler.py         # Ретроспективний профайлінг із готової БД
-├── migrate_done_file.py      # Міграція старих баз даних → databases/
-├── reset_db.py               # Скидання / очищення БД
+├── cross_analyzer.py         # Cross-analysis of common reposts + semantics
+├── cross_platform_linker.py  # Search for profiles on other platforms
+├── external_osint.py         # Maigret + Instaloader reconnaissance
+├── network_analyzer.py       # Contact network analysis (top-5 + LLM)
+├── retro_profiler.py         # Retrospective profiling from a ready DB
+├── migrate_done_file.py      # Migration of old databases → databases/
+├── reset_db.py               # Reset / clear DB
 │
-├── db_schema.py              # Єдина схема SQLite (ініціалізація + міграція)
-├── db_manager.py             # Repository-патерн — єдина точка доступу до БД
-├── config.py                 # Централізована конфігурація (Ollama, Whisper)
-├── utils.py                  # Утиліти: sanitize_username, db_path_for
+├── db_schema.py              # Single SQLite schema (init + migration)
+├── db_manager.py             # Repository pattern — single DB access point
+├── config.py                 # Centralized configuration (Ollama, Whisper)
+├── utils.py                  # Utilities: sanitize_username, db_path_for
 │
-├── databases/                # SQLite бази (osint_<user>.db) — у .gitignore
-├── reports/                  # TXT та PDF звіти — у .gitignore
-└── downloaded_videos/        # Тимчасові MP4 (очищуються автоматично)
+├── databases/                # SQLite databases (osint_<user>.db) — in .gitignore
+├── reports/                  # TXT and PDF reports — in .gitignore
+└── downloaded_videos/        # Temporary MP4s (cleared automatically)
 ```
 
 ---
 
-## 🖥️ Системні вимоги
+## 🖥️ System Requirements
 
-| Компонент | Мінімум | Рекомендовано |
+| Component | Minimum | Recommended |
 |-----------|---------|---------------|
-| ОС | Ubuntu 20.04+ / Debian | Ubuntu 22.04 / 24.04 |
+| OS | Ubuntu 20.04+ / Debian | Ubuntu 22.04 / 24.04 |
 | Python | 3.10 | 3.11+ |
 | RAM | 8 GB | 16+ GB |
-| GPU VRAM | — | 8+ GB (Nvidia, для швидкого Whisper/Moondream) |
-| Місце на диску | 10 GB | 50+ GB |
-| Google Chrome | остання стабільна | — |
-| Ollama | ≥ 0.3 | останній реліз |
-| ffmpeg | будь-яка | — |
+| GPU VRAM | — | 8+ GB (Nvidia, for fast Whisper/Moondream) |
+| Disk Space | 10 GB | 50+ GB |
+| Google Chrome | latest stable | — |
+| Ollama | ≥ 0.3 | latest release |
+| ffmpeg | any | — |
 
 ---
 
-## 🔧 Встановлення
+## 🔧 Installation
 
-### 1. Системні залежності
+### 1. System Dependencies
 
 ```bash
 sudo apt update && sudo apt install -y \
@@ -121,7 +121,7 @@ sudo apt update && sudo apt install -y \
     wkhtmltopdf google-chrome-stable
 ```
 
-### 2. Клонування та середовище
+### 2. Cloning and Environment
 
 ```bash
 git clone https://github.com/YOUR_USERNAME/tiktok-osint-profiler.git
@@ -131,7 +131,7 @@ python3 -m venv venv
 source venv/bin/activate
 ```
 
-### 3. Python-залежності
+### 3. Python Dependencies
 
 ```bash
 pip install --upgrade pip
@@ -148,118 +148,118 @@ pip install \
     maigret instaloader
 ```
 
-### 4. Ollama — локальні моделі
+### 4. Ollama — Local Models
 
 ```bash
-# Встановлення Ollama
+# Install Ollama
 curl -fsSL https://ollama.com/install.sh | sh
 
-# Завантаження моделей
-ollama pull qwen2.5        # основна LLM (тегування, профайлінг, RAG)
-ollama pull moondream      # мультимодальна (аналіз кадрів)
+# Download models
+ollama pull qwen2.5        # main LLM (tagging, profiling, RAG)
+ollama pull moondream      # multimodal (frame analysis)
 ```
 
-> **Важливо:** переконайтеся що `ollama serve` запущений перед стартом конвеєра
+> **Important:** make sure `ollama serve` is running before starting the pipeline
 
 ---
 
-## ⚙️ Конфігурація
+## ⚙️ Configuration
 
-Усі параметри у [`config.py`](config.py):
+All parameters are in [`config.py`](config.py):
 
 ```python
-# Адреса та моделі Ollama
+# Ollama address and models
 OLLAMA_URL          = "http://127.0.0.1:11434/api/generate"
-OLLAMA_MODEL        = "qwen2.5"         # текстовий аналіз
-OLLAMA_VISION_MODEL = "moondream"       # аналіз зображень
+OLLAMA_MODEL        = "qwen2.5"         # text analysis
+OLLAMA_VISION_MODEL = "moondream"       # image analysis
 
-# Тайм-аути (секунди)
+# Timeouts (seconds)
 OLLAMA_TIMEOUT_TAGS    = 60             # sublimator / analyzer
-OLLAMA_TIMEOUT_PROFILE = 1200           # profiler (великий контекст)
-OLLAMA_VISION_TIMEOUT  = 90             # moondream на один кадр
+OLLAMA_TIMEOUT_PROFILE = 1200           # profiler (large context)
+OLLAMA_VISION_TIMEOUT  = 90             # moondream per frame
 
 # Whisper STT
 WHISPER_MODEL_SIZE  = "small"           # base | small | medium | large
 
-# Антидетект парсера
+# Parser anti-detect
 SCROLL_PAUSE_MIN = 3.5
 SCROLL_PAUSE_MAX = 6.0
 ```
 
 ---
 
-## 🚀 Запуск
+## 🚀 Usage
 
-### Варіант A: Streamlit-дашборд (рекомендовано)
+### Option A: Streamlit Dashboard (Recommended)
 
 ```bash
 source venv/bin/activate
 streamlit run app.py
 ```
 
-Відкрийте браузер: `http://localhost:8501`
+Open a browser: `http://localhost:8501`
 
-**Що є в дашборді:**
+**What's in the dashboard:**
 
-| Вкладка | Функція |
+| Tab | Function |
 |---------|---------|
-| 📄 **Досьє** | Повний психологічний звіт + кнопка завантаження PDF |
-| 🕸️ **Соціальний граф** | Граф @-згадок або Граф інтересів (перемикач) |
-| 💬 **ШІ-слідчий** | RAG-чат із базою — задавайте питання по профілю |
-| 🖼️ **Доказова база** | Сітка відео/кадрів з OCR-текстом та транскрипцією |
-| 🔗 **Перетини БД** | Точні збіги репостів між профілями + семантика через Qwen |
-| 📡 **Мережевий аналіз** | Топ-5 контактів + LLM-класифікація зв'язків |
-| 🌐 **Пошук на платформах** | Перевірка нікнейму на Instagram, YouTube, Reddit, X |
+| 📄 **Dossier** | Full psychological report + PDF download button |
+| 🕸️ **Social Graph** | @-mentions Graph or Interests Graph (toggle) |
+| 💬 **AI Investigator** | RAG chat with the database — ask questions about the profile |
+| 🖼️ **Evidence Base** | Grid of videos/frames with OCR text and transcription |
+| 🔗 **DB Intersections** | Exact repost matches between profiles + semantics via Qwen |
+| 📡 **Network Analysis** | Top-5 contacts + LLM relationship classification |
+| 🌐 **Cross-Platform Search** | Check nickname on Instagram, YouTube, Reddit, X |
 
-### Варіант B: CLI-конвеєр
+### Option B: CLI Pipeline
 
 ```bash
 source venv/bin/activate
 
-# Повний конвеєр (кроки 1–6)
+# Full pipeline (steps 1–6)
 python run_pipeline.py --user TARGET_USERNAME --limit 100 --workers 3
 
-# Лише генерація досьє з готової БД
+# Only dossier generation from a ready DB
 python run_pipeline.py --user TARGET_USERNAME --only-profiler
 ```
 
-| Параметр | За замовч. | Опис |
+| Parameter | Default | Description |
 |----------|------------|------|
-| `--user` | — (обов'язк.) | Нікнейм TikTok без `@` |
-| `--limit` | `100` | Макс. кількість відео |
-| `--workers` | `3` | Паралельних потоків ШІ |
-| `--only-profiler` | `false` | Пропустити збір, лише перегенерувати досьє |
+| `--user` | — (required) | TikTok nickname without `@` |
+| `--limit` | `100` | Max number of videos |
+| `--workers` | `3` | Parallel AI workers |
+| `--only-profiler` | `false` | Skip collection, just regenerate dossier |
 
-### Перший запуск — авторизація TikTok
+### First Run — TikTok Authorization
 
-При першому запуску з'явиться вікно браузера:
-1. Авторизуйтесь вручну у TikTok
-2. Скрипт збереже сесію у `tiktok_cookies.json` (**локально, у `.gitignore`**)
-3. Наступні запуски не потребують ручного входу
+On the first run, a browser window will appear:
+1. Log in manually to TikTok
+2. The script will save the session in `tiktok_cookies.json` (**locally, in `.gitignore`**)
+3. Subsequent runs do not require manual login
 
 ---
 
-## 🗃️ Утиліти
+## 🗃️ Utilities
 
-### Міграція старих баз даних
+### Old Database Migration
 
-Якщо у вас є бази з папки `done_file/` (стара версія):
+If you have databases from the `done_file/` folder (old version):
 
 ```bash
 python migrate_done_file.py
 ```
 
-Скрипт копіює бази в `databases/`, оновлює схему, витягує `@-згадки`.
+The script copies databases to `databases/`, updates the schema, and extracts `@-mentions`.
 
-### Ретроспективний профайлінг
+### Retrospective Profiling
 
-Перегенерувати досьє без повторного парсингу:
+Regenerate dossier without parsing again:
 
 ```bash
 python retro_profiler.py --db databases/osint_username.db
 ```
 
-### Скидання аналізу (зберігши репости)
+### Reset Analysis (keeping reposts)
 
 ```bash
 python reset_db.py --user username
@@ -267,7 +267,7 @@ python reset_db.py --user username
 
 ---
 
-## 🚨 Вирішення проблем
+## 🚨 Troubleshooting
 
 **`ollama: connection refused`**
 ```bash
@@ -275,69 +275,69 @@ ollama serve &
 curl http://127.0.0.1:11434/api/tags
 ```
 
-**`wkhtmltopdf: cannot connect to X server`** (headless-сервер)
+**`wkhtmltopdf: cannot connect to X server`** (headless server)
 ```bash
 sudo apt install xvfb
 Xvfb :99 -screen 0 1024x768x24 &
 DISPLAY=:99 streamlit run app.py
 ```
 
-**Selenium не знаходить Chrome**
+**Selenium cannot find Chrome**
 ```bash
 wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
 sudo dpkg -i google-chrome-stable_current_amd64.deb
 sudo apt --fix-broken install
 ```
 
-**Граф інтересів порожній**
-> Запустіть повний конвеєр до кроку 4 (sublimator). Граф будується на основі таблиці `analysis`.
+**Interests Graph is empty**
+> Run the full pipeline up to step 4 (sublimator). The graph is built based on the `analysis` table.
 
-**OpenCV не відкриває відео**
-> `vision_manager_3.py` автоматично перемикається на `ffmpeg`-fallback. Переконайтесь що `ffmpeg` встановлений.
+**OpenCV doesn't open video**
+> `vision_manager_3.py` automatically switches to the `ffmpeg`-fallback. Make sure `ffmpeg` is installed.
 
 ---
 
-## 🏗️ Архітектура даних
+## 🏗️ Data Architecture
 
 ```sql
--- Таблиця reposts: сирі дані парсера
+-- reposts table: raw parser data
 CREATE TABLE reposts (
     video_id   TEXT PRIMARY KEY,
     author     TEXT,
     url        TEXT,
     description TEXT,
-    hashtags   TEXT,     -- JSON-масив хештегів
-    mentions   TEXT,     -- JSON-масив @-згадок
-    local_path TEXT,     -- шлях до завантаженого MP4
+    hashtags   TEXT,     -- JSON array of hashtags
+    mentions   TEXT,     -- JSON array of @-mentions
+    local_path TEXT,     -- path to downloaded MP4
     parsed_at  DATETIME
 );
 
--- Таблиця analysis: результати ШІ-аналізу
+-- analysis table: AI analysis results
 CREATE TABLE analysis (
     video_id       TEXT PRIMARY KEY,
-    visual_context TEXT,  -- опис кадрів від Moondream
-    video_text     TEXT,  -- OCR-текст з EasyOCR
-    audio_text     TEXT,  -- транскрипція Whisper
-    interests      TEXT,  -- теги від Qwen2.5
+    visual_context TEXT,  -- frame description from Moondream
+    video_text     TEXT,  -- OCR text from EasyOCR
+    audio_text     TEXT,  -- Whisper transcription
+    interests      TEXT,  -- tags from Qwen2.5
     hobbies        TEXT,
     relations      TEXT,
     music_taste    TEXT,
-    raw_result     TEXT   -- повна відповідь LLM
+    raw_result     TEXT   -- full LLM response
 );
 ```
 
 ---
 
-## ⚠️ Відповідальне використання
+## ⚠️ Responsible Use
 
-> Цей інструмент призначений **виключно для легітимних OSINT-розслідувань** — журналістики, верифікації інформації, кібербезпеки та академічних досліджень.
+> This tool is intended **exclusively for legitimate OSINT investigations** — journalism, fact-checking, cybersecurity, and academic research.
 
-- Аналізуйте лише **публічно доступні** дані
-- Дотримуйтесь законодавства вашої країни щодо захисту персональних даних (GDPR, Закон України про захист персональних даних)
-- Зберігайте зібрані дані відповідально — папки `databases/` та `reports/` заблоковані у `.gitignore` не випадково
+- Analyze only **publicly available** data
+- Comply with your country's legislation regarding personal data protection (e.g., GDPR)
+- Store collected data responsibly — the `databases/` and `reports/` folders are blocked in `.gitignore` for a reason
 
 ---
 
-## 📄 Ліцензія
+## 📄 License
 
-MIT License — дивіться [LICENSE](LICENSE)
+MIT License — see [LICENSE](LICENSE)

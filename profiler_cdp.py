@@ -1,16 +1,16 @@
 """
-profiler_cdp.py — Генератор психологічного досьє (крок 6).
+profiler_cdp.py — Psychological profile generator (step 6).
 
-Зміни (рефакторинг):
-  - Видалено мертву змінну `optimized_data` (оголошувалась, але не використовувалась)
-  - Конфігурація з config.py (OLLAMA_URL, MODEL, OLLAMA_TIMEOUT_PROFILE)
-  - db_schema.get_connection() замість прямого sqlite3.connect()
-  - HTML-санітизація тіла LLM-відповіді перед передачею у pdfkit
-    (захист від HTML injection у PDF)
-  - generate_profile тепер приймає temperature як параметр
-    (для майбутньої інтеграції з Live Prompt Engineering у Streamlit)
-  - Прибрано raw_result у process_tags: raw_result == summary (1–2 слова),
-    тепер це "Категорії відео (суть)" без додаткової обробки
+Changes (refactoring):
+  - Removed dead variable `optimized_data` (declared but not used)
+  - Configuration from config.py (OLLAMA_URL, MODEL, OLLAMA_TIMEOUT_PROFILE)
+  - db_schema.get_connection() instead of direct sqlite3.connect()
+  - HTML-sanitization of LLM response body before passing to pdfkit
+    (protection against HTML injection in PDF)
+  - generate_profile now takes temperature as a parameter
+    (for future integration with Live Prompt Engineering in Streamlit)
+  - Removed raw_result in process_tags: raw_result == summary (1-2 words),
+    now it's "Video categories (essence)" without additional processing
 """
 
 import json
@@ -29,9 +29,10 @@ logger = logging.getLogger(__name__)
 
 
 def process_tags(raw_text: str) -> list[str]:
-    """Розбиває рядок з тегами на список чистих слів у нижньому регістрі."""
+    """Splits a string of tags into a list of clean words in lowercase."""
     if not raw_text:
         return []
+        
     return [tag.strip().lower() for tag in raw_text.split(",") if tag.strip()]
 
 
@@ -41,60 +42,60 @@ def generate_profile(
     temperature: float = 0.3,
 ) -> str:
     """
-    Надсилає агреговану статистику тегів до Qwen2.5 і повертає Markdown-звіт.
+    Sends aggregated tag statistics to Qwen2.5 and returns a Markdown report.
 
     Args:
-        aggregated_stats: словник {категорія: {тег: кількість}}
-        total_videos:     загальна кількість відео в аналізі
-        temperature:      температура генерації (0.1–0.7); керується з Streamlit sidebar
+        aggregated_stats: dictionary {category: {tag: count}}
+        total_videos:     total number of videos in analysis
+        temperature:      generation temperature (0.1-0.7); controlled from Streamlit sidebar
     """
     stats_text = json.dumps(aggregated_stats, ensure_ascii=False, indent=2)
 
     prompt = f"""
     <ROLE>
-    Ти — елітний OSINT-профайлер та аналітик. Твоє завдання: скласти психологічне досьє
-    на основі тегів з TikTok. Пиши ВИКЛЮЧНО природною українською мовою.
+    You are an elite OSINT profiler and analyst. Your task: create a psychological profile
+    based on TikTok tags. Write EXCLUSIVELY in natural English.
     </ROLE>
 
     <DATA>
-    Всього відео: {total_videos}
-    Статистика тегів:
+    Total videos: {total_videos}
+    Tag statistics:
     {stats_text}
     </DATA>
 
     <CRITICAL_RULES>
-    1. ЛОГІКА MBTI: "I" = інтроверт, "E" = екстраверт.
-    2. TIKTOK-КОНТЕКСТ: теги "зброя"/"поліція" поруч з іграми — це кіберспорт або чорний гумор.
-    3. ЗАБОРОНА СУРЖИКУ: "дружбені взаємодійства" → "соціальні контакти".
-    4. ЗАБОРОНА ТАВТОЛОГІЇ: кожен пункт — унікальна думка.
-    5. ФОРМАТУВАННЯ: коротко, професійно, без "води".
+    1. MBTI LOGIC: "I" = introvert, "E" = extrovert.
+    2. TIKTOK CONTEXT: tags "weapon"/"police" near games - this is esports or black humor.
+    3. NO SLANG: "friend interactions" -> "social contacts".
+    4. NO TAUTOLOGY: each point is a unique thought.
+    5. FORMATTING: short, professional, without "fluff".
     </CRITICAL_RULES>
 
     <TEMPLATE>
-    ### I. ПСИХОЛОГІЧНИЙ ПОРТРЕТ ТА КОГНІТИВНА БАЗА
-    - **Психотип (MBTI) та темперамент:** [тип + 1 речення пояснення]
-    - **Базові цінності та емоційний фон:** [мотиватори + звичний емоційний стан]
-    - **Внутрішні конфлікти:** [тривоги за гумором/іграми/ескапізмом]
+    ### I. PSYCHOLOGICAL PORTRAIT AND COGNITIVE BASE
+    - **Psychotype (MBTI) and temperament:** [type + 1 sentence explanation]
+    - **Basic values and emotional background:** [motivators + usual emotional state]
+    - **Inner conflicts:** [anxieties behind humor/games/escapism]
 
-    ### II. СОЦІАЛЬНА ДИНАМІКА ТА СТОСУНКИ
-    - **Поточний вектор:** [нові знайомства vs. вузьке коло/самотність]
-    - **Тип прив'язаності:** [надійний / уникливий / тривожний + аргумент]
-    - **Тригери у спілкуванні:** [поведінка, що викликає дискомфорт]
+    ### II. SOCIAL DYNAMICS AND RELATIONSHIPS
+    - **Current vector:** [new acquaintances vs. narrow circle/loneliness]
+    - **Attachment style:** [secure / avoidant / anxious + argument]
+    - **Communication triggers:** [behavior that causes discomfort]
 
-    ### III. ЛАЙФСТАЙЛ, ЕСТЕТИКА ТА ЕСКАПІЗМ
-    - **Дофамінова розрядка:** [основні способи відпочинку]
-    - **Специфіка гумору:** [чорний / іронічний / абсурдний і навіщо]
-    - **Інтелектуальні запити:** [теми для роздумів та аналізу]
+    ### III. LIFESTYLE, AESTHETICS AND ESCAPISM
+    - **Dopamine release:** [main ways to relax]
+    - **Humor specifics:** [black / ironic / absurd and why]
+    - **Intellectual requests:** [topics for reflection and analysis]
 
-    ### IV. ОПЕРАТИВНИЙ ВЕКТОР (СТРАТЕГІЯ КОМУНІКАЦІЇ)
-    - **Тригери довіри:** [2–3 теми для швидкого встановлення контакту]
-    - **Тригери відторгнення:** [чого категорично уникати]
-    - **Реакція на критику:** [агресія / ігнорування / гумор]
+    ### IV. OPERATIONAL VECTOR (COMMUNICATION STRATEGY)
+    - **Trust triggers:** [2-3 topics for quick contact establishment]
+    - **Rejection triggers:** [what to strictly avoid]
+    - **Reaction to criticism:** [aggression / ignoring / humor]
     </TEMPLATE>
     """
 
     logger.info(
-        "ШІ аналізує статистику (%d символів). Температура: %.1f...",
+        "AI is analyzing statistics (%d characters). Temperature: %.1f...",
         len(stats_text),
         temperature,
     )
@@ -116,26 +117,26 @@ def generate_profile(
         )
         if response.status_code == 200:
             return response.json().get("response", "")
-        logger.error("Помилка сервера ШІ: HTTP %d", response.status_code)
-        return f"Помилка сервера: {response.status_code}"
+        logger.error("AI server error: HTTP %d", response.status_code)
+        return f"Server error: {response.status_code}"
     except requests.exceptions.Timeout:
-        logger.error("ШІ не вклався у відведений час.")
-        return "Помилка: тайм-аут. Спробуйте потужнішу GPU або зменшіть обсяг даних."
+        logger.error("AI did not finish in the allotted time.")
+        return "Error: timeout. Try a more powerful GPU or reduce the data volume."
     except Exception as exc:
-        logger.error("Помилка з'єднання: %s", exc, exc_info=True)
-        return f"Помилка з'єднання: {exc}"
+        logger.error("Connection error: %s", exc, exc_info=True)
+        return f"Connection error: {exc}"
 
 
 def save_as_pdf(text: str, txt_filename: str) -> str:
     """
-    Конвертує Markdown-звіт у PDF.
+    Converts Markdown report to PDF.
 
-    HTML-тіло від LLM санітизується через markdown.markdown(),
-    що уникне HTML injection у кінцевому PDF.
+    HTML body from LLM is sanitized via markdown.markdown(),
+    which prevents HTML injection in the final PDF.
     """
     pdf_filename = txt_filename.replace(".txt", ".pdf")
 
-    # markdown.markdown() ескейпить небезпечний HTML у вхідному тексті
+    # markdown.markdown() escapes dangerous HTML in the input text
     html_body = markdown.markdown(text, extensions=["extra"])
 
     html_template = f"""
@@ -171,8 +172,8 @@ def save_as_pdf(text: str, txt_filename: str) -> str:
     </head>
     <body>
         <div class="header">
-            <h1>ПСИХОЛОГІЧНЕ ДОСЬЄ (OSINT)</h1>
-            <p>Згенеровано автоматично на основі аналізу метаданих TikTok</p>
+            <h1>PSYCHOLOGICAL DOSSIER (OSINT)</h1>
+            <p>Generated automatically based on TikTok metadata analysis</p>
         </div>
         {html_body}
     </body>
@@ -190,7 +191,7 @@ def main(
     temperature: float = 0.3,
 ) -> None:
     if not os.path.exists(db_path):
-        logger.error("Файл бази %s не знайдено.", db_path)
+        logger.error("Database file %s not found.", db_path)
         return
 
     conn = get_connection(db_path)
@@ -206,27 +207,27 @@ def main(
     conn.close()
 
     if not rows:
-        logger.warning("Немає даних для профайлінгу (жодне відео не проаналізоване).")
+        logger.warning("No data for profiling (no videos analyzed).")
         return
 
-    logger.info("Агрегуємо теги з %d відео...", len(rows))
+    logger.info("Aggregating tags from %d videos...", len(rows))
 
     stats: dict[str, Counter] = {
-        "Інтереси":              Counter(),
-        "Хобі":                  Counter(),
-        "Стосунки":              Counter(),
-        "Музичний смак":         Counter(),
-        "Категорії відео (суть)": Counter(),
+        "Interests": Counter(),
+        "Hobbies": Counter(),
+        "Relationships": Counter(),
+        "Music taste": Counter(),
+        "Video categories (essence)": Counter(),
     }
 
     for row in rows:
-        stats["Інтереси"].update(process_tags(row["interests"]))
-        stats["Хобі"].update(process_tags(row["hobbies"]))
-        stats["Стосунки"].update(process_tags(row["relations"]))
-        stats["Музичний смак"].update(process_tags(row["music_taste"]))
-        stats["Категорії відео (суть)"].update(process_tags(row["raw_result"]))
+        stats["Interests"].update(process_tags(row["interests"]))
+        stats["Hobbies"].update(process_tags(row["hobbies"]))
+        stats["Relationships"].update(process_tags(row["relations"]))
+        stats["Music taste"].update(process_tags(row["music_taste"]))
+        stats["Video categories (essence)"].update(process_tags(row["raw_result"]))
 
-    # Топ-40 у кожній категорії
+    # Top 40 in each category
     filtered_stats = {
         cat: {k: v for k, v in counter.most_common(40) if k}
         for cat, counter in stats.items()
@@ -237,17 +238,17 @@ def main(
 
     with open(output_file, "w", encoding="utf-8") as fh:
         fh.write(final_report)
-    logger.info("Текстовий звіт: %s", output_file)
+    logger.info("Text report: %s", output_file)
 
     try:
         pdf_name = save_as_pdf(final_report, output_file)
-        logger.info("PDF-звіт: %s", pdf_name)
+        logger.info("PDF report: %s", pdf_name)
     except Exception as exc:
         logger.error(
-            "Не вдалося створити PDF (перевірте pdfkit та wkhtmltopdf): %s", exc
+            "Failed to create PDF (check pdfkit and wkhtmltopdf): %s", exc
         )
 
-    logger.info("Психологічний портрет готовий!")
+    logger.info("Psychological portrait is ready!")
 
 
 if __name__ == "__main__":

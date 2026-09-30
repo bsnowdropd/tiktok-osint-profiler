@@ -1,13 +1,13 @@
 """
-audio_manager.py — Whisper STT: транскрипція аудіо з відеофайлів.
+audio_manager.py - Whisper STT: audio transcription from video files.
 
-Зміни (рефакторинг):
-  - init_db_structure → db_schema.get_connection() (уніфікована схема)
-  - os.remove ТІЛЬКИ після успішної транскрибації (раніше видалявся навіть при помилці)
-  - Sentinel-значення " " замінено на реальну пустий рядок "" з явним позначкою
-  - LIMIT {limit} через f-string → параметризований запит (SQL-ін'єкція)
-  - WHISPER_MODEL_SIZE → config.WHISPER_MODEL_SIZE (тепер "small" замість "base")
-  - warnings.filterwarnings("ignore") → конкретний фільтр тільки для UserWarning
+Changes (refactoring):
+  - init_db_structure -> db_schema.get_connection() (unified schema)
+  - os.remove ONLY after successful transcription (previously deleted even on error)
+  - Sentinel value " " replaced with actual empty string "" with explicit marking
+  - LIMIT {limit} via f-string -> parameterized query (SQL injection)
+  - WHISPER_MODEL_SIZE -> config.WHISPER_MODEL_SIZE (now "small" instead of "base")
+  - warnings.filterwarnings("ignore") -> specific filter only for UserWarning
 """
 
 import logging
@@ -20,7 +20,7 @@ import whisper
 import config
 from db_schema import get_connection
 
-# Пригнічуємо лише FP16 UserWarning від Whisper/PyTorch, не всі попередження
+# Suppress only FP16 UserWarning from Whisper/PyTorch, not all warnings
 warnings.filterwarnings("ignore", message=".*FP16.*", category=UserWarning)
 
 logger = logging.getLogger(__name__)
@@ -28,17 +28,17 @@ logger = logging.getLogger(__name__)
 
 def process_audio(limit: int = 100, db_path: str = "osint_unknown.db") -> None:
     """
-    Транскрибує аудіо з локальних MP4-файлів за допомогою Whisper.
+    Transcribes audio from local MP4 files using Whisper.
 
-    Логіка:
-    - Обирає відео з `reposts`, де є `local_path` і ще немає `audio_text`.
-    - Після успішної транскрибації видаляє MP4 з диску (економія місця).
-    - При помилці транскрибації — НЕ видаляє файл, записує NULL у БД,
-      щоб наступний запуск міг повторити спробу.
+    Logic:
+    - Selects videos from `reposts` where `local_path` is present and `audio_text` is empty.
+    - After successful transcription, deletes the MP4 from disk (saves space).
+    - On transcription error - DOES NOT delete the file, writes NULL to DB,
+      so the next run can retry.
     """
     conn = get_connection(db_path)
 
-    # Параметризований запит — без f-string для LIMIT (захист від SQL injection)
+    # Parameterized query - no f-string for LIMIT (protection against SQL injection)
     rows = conn.execute(
         """
         SELECT r.video_id, r.local_path
@@ -54,12 +54,12 @@ def process_audio(limit: int = 100, db_path: str = "osint_unknown.db") -> None:
     ).fetchall()
 
     if not rows:
-        logger.info("Нових відео для транскрибації не знайдено.")
+        logger.info("No new videos found for transcription.")
         conn.close()
         return
 
     logger.info(
-        "Завантаження Whisper '%s' для транскрибації %d відео...",
+        "Loading Whisper '%s' for transcribing %d videos...",
         config.WHISPER_MODEL_SIZE,
         len(rows),
     )
@@ -67,8 +67,8 @@ def process_audio(limit: int = 100, db_path: str = "osint_unknown.db") -> None:
     try:
         model = whisper.load_model(config.WHISPER_MODEL_SIZE)
     except Exception as exc:
-        logger.error("Не вдалося завантажити Whisper: %s", exc)
-        logger.error("Встановіть: pip install openai-whisper  та  apt install ffmpeg")
+        logger.error("Failed to load Whisper: %s", exc)
+        logger.error("Install: pip install openai-whisper and apt install ffmpeg")
         conn.close()
         return
 
@@ -77,8 +77,8 @@ def process_audio(limit: int = 100, db_path: str = "osint_unknown.db") -> None:
         v_id, local_path = row["video_id"], row["local_path"]
 
         if not local_path or not Path(local_path).exists():
-            logger.warning("[%d/%d] Файл не знайдено: %s (ID: %s)", i, total, local_path, v_id)
-            # Позначаємо як оброблений (файл видалено раніше або недоступний)
+            logger.warning("[%d/%d] File not found: %s (ID: %s)", i, total, local_path, v_id)
+            # Mark as processed (file deleted earlier or unavailable)
             conn.execute(
                 """INSERT INTO analysis (video_id, audio_text) VALUES (?, '')
                    ON CONFLICT(video_id) DO UPDATE SET audio_text = ''""",
@@ -87,7 +87,7 @@ def process_audio(limit: int = 100, db_path: str = "osint_unknown.db") -> None:
             conn.commit()
             continue
 
-        logger.info("[%d/%d] Транскрибація: %s", i, total, v_id)
+        logger.info("[%d/%d] Transcribing: %s", i, total, v_id)
         transcribed_text: str | None = None
         success = False
 
@@ -97,16 +97,16 @@ def process_audio(limit: int = 100, db_path: str = "osint_unknown.db") -> None:
             success = True
 
             if transcribed_text:
-                logger.info("  [✓] Голос: %s...", transcribed_text[:60])
+                logger.info("  [✓] Voice: %s...", transcribed_text[:60])
             else:
-                logger.info("  [i] Відео без голосу.")
-                transcribed_text = ""   # явний порожній рядок, не " " (sentinel-антипатерн)
+                logger.info("  [i] Video without voice.")
+                transcribed_text = ""   # explicit empty string, not " " (sentinel anti-pattern)
 
         except Exception as exc:
-            logger.error("  [!] Помилка транскрибації %s: %s", v_id, exc)
-            # transcribed_text залишається None → відео буде повторно оброблено
+            logger.error("  [!] Transcription error %s: %s", v_id, exc)
+            # transcribed_text remains None -> video will be reprocessed
 
-        # ── Запис у БД ────────────────────────────────────────────────────────
+        # ── Writing to DB ───────────────────────────────────────────────────────
         if success:
             conn.execute(
                 """INSERT INTO analysis (video_id, audio_text) VALUES (?, ?)
@@ -115,12 +115,12 @@ def process_audio(limit: int = 100, db_path: str = "osint_unknown.db") -> None:
             )
             conn.commit()
 
-            # Видалення MP4 перенесено до run_pipeline.py
+            # MP4 deletion moved to run_pipeline.py
         else:
-            logger.warning("  [~] %s: файл збережено для повторної спроби.", v_id)
+            logger.warning("  [~] %s: file kept for retry.", v_id)
 
     conn.close()
-    logger.info("Транскрибацію аудіо завершено!")
+    logger.info("Audio transcription completed!")
 
 
 if __name__ == "__main__":

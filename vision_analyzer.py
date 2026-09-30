@@ -9,7 +9,7 @@ import easyocr
 from pathlib import Path
 
 # ==========================================
-# КОНФІГУРАЦІЯ
+# CONFIGURATION
 # ==========================================
 DB_FILE = "tiktok_reposts.db"
 COOKIE_TXT = "temp_cookies.txt"
@@ -19,13 +19,13 @@ MODEL_NAME = "moondream"
 VIDEO_DIR = Path("temp_videos")
 VIDEO_DIR.mkdir(exist_ok=True)
 
-# Ініціалізація OCR (завантажується один раз)
-print("[i] Завантаження моделей OCR...")
+# OCR Initialization (loaded once)
+print("[i] Loading OCR models...")
 reader = easyocr.Reader(['uk', 'en', 'ru'])
 
 
 def download_video(url, video_id):
-    """Завантажує відео через yt-dlp."""
+    """Downloads video via yt-dlp."""
     output_path = VIDEO_DIR / f"{video_id}.mp4"
     ydl_opts = {
         'format': 'mp4',
@@ -42,18 +42,18 @@ def download_video(url, video_id):
             ydl.download([url])
         return output_path
     except Exception as e:
-        print(f"  [!] Помилка завантаження {video_id}: {e}")
+        print(f"  [!] Download error {video_id}: {e}")
         return None
 
 
 def get_frame_and_text(video_path):
-    """Витягує кадр та розпізнає текст на ньому."""
+    """Extracts a frame and recognizes text on it."""
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         return None, ""
 
     fps = cap.get(cv2.CAP_PROP_FPS)
-    cap.set(cv2.CAP_PROP_POS_FRAMES, int(fps * 2))  # Кадр на 2-й секунді
+    cap.set(cv2.CAP_PROP_POS_FRAMES, int(fps * 2))  # Frame at 2nd second
     success, frame = cap.read()
 
     on_screen_text = ""
@@ -64,7 +64,7 @@ def get_frame_and_text(video_path):
         text_results = reader.readtext(frame, detail=0)
         on_screen_text = " | ".join(text_results)
 
-        # Підготовка для ШІ
+        # Preparation for AI
         frame_resized = cv2.resize(frame, (640, 360))
         _, buffer = cv2.imencode('.jpg', frame_resized)
         img_base64 = base64.b64encode(buffer).decode('utf-8')
@@ -74,7 +74,7 @@ def get_frame_and_text(video_path):
 
 
 def get_visual_description(frame_b64):
-    """Запит до Moondream через Ollama."""
+    """Request to Moondream via Ollama."""
     payload = {
         "model": MODEL_NAME,
         "prompt": "Describe this TikTok frame briefly. What is the main action?",
@@ -85,7 +85,7 @@ def get_visual_description(frame_b64):
         response = requests.post(OLLAMA_URL, json=payload, timeout=60)
         return response.json().get('response', '')
     except Exception as e:
-        print(f"  [!] Помилка Ollama: {e}")
+        print(f"  [!] Ollama error: {e}")
         return ""
 
 
@@ -93,7 +93,7 @@ def main():
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
 
-    # Підготовка таблиці
+    # Table preparation
     conn.execute(
         "CREATE TABLE IF NOT EXISTS analysis (video_id TEXT PRIMARY KEY, visual_context TEXT, video_text TEXT)")
     try:
@@ -101,7 +101,7 @@ def main():
     except:
         pass
 
-    # Беремо 20 відео для обробки
+    # Taking 20 videos for processing
     rows = conn.execute("""
                         SELECT r.video_id, r.url
                         FROM reposts r
@@ -110,14 +110,14 @@ def main():
                         """).fetchall()
 
     if not rows:
-        print("[i] Немає нових відео для аналізу.")
+        print("[i] No new videos for analysis.")
         return
 
-    print(f"[i] Починаємо обробку {len(rows)} відео...")
+    print(f"[i] Starting processing of {len(rows)} videos...")
 
     for row in rows:
         v_id, url = row['video_id'], row['url']
-        print(f"\n[→] Обробка {v_id}...")
+        print(f"\n[→] Processing {v_id}...")
 
         video_path = download_video(url, v_id)
 
@@ -136,17 +136,17 @@ def main():
                              """, (v_id, description, screen_text))
                 conn.commit()
 
-                print(f"  [✓] Текст: {screen_text[:50]}...")
-                print(f"  [✓] Віжн: {description[:50]}...")
+                print(f"  [✓] Text: {screen_text[:50]}...")
+                print(f"  [✓] Vision: {description[:50]}...")
 
-            # Видаляємо відео після аналізу
+            # Deleting video after analysis
             video_path.unlink()
             time.sleep(1)
         else:
-            print(f"  [!] Пропущено.")
+            print(f"  [!] Skipped.")
 
     conn.close()
-    print("\n[✓] Пакетна обробка завершена!")
+    print("\n[✓] Batch processing completed!")
 
 
 if __name__ == "__main__":

@@ -1,12 +1,12 @@
 """
-network_analyzer.py — Топ-5 @-згадок із БД та їхня LLM-класифікація.
+network_analyzer.py — Top 5 @-mentions from the DB and their LLM classification.
 
-Зміни (рефакторинг):
-  - SQL тепер фільтрує за `author = username` (раніше читав усю базу!)
-  - subprocess ollama → requests до HTTP API (узгоджено з рештою модулів)
-  - Модель qwen2.5 замість llama2 (відповідає конфігурації)
-  - timeout збільшено до config.OLLAMA_TIMEOUT_TAGS
-  - Конфігурація з config.py
+Changes (refactoring):
+  - SQL now filters by `author = username` (previously read the entire DB!)
+  - subprocess ollama → requests to HTTP API (aligned with other modules)
+  - Model qwen2.5 instead of llama2 (matches configuration)
+  - timeout increased to config.OLLAMA_TIMEOUT_TAGS
+  - Configuration from config.py
 """
 
 import json
@@ -24,22 +24,22 @@ logger = logging.getLogger(__name__)
 
 def top_mentions(username: str, db_path: str) -> list[tuple[str, int]]:
     """
-    Повертає топ-5 @-згадок у репостах конкретного користувача.
+    Returns the top 5 @-mentions in reposts of a specific user.
 
     Args:
-        username: TikTok-нікнейм (без '@') — фільтрує тільки його репости.
-        db_path:  Шлях до osint_{username}.db.
+        username: TikTok nickname (without '@') — filters only their reposts.
+        db_path:  Path to osint_{username}.db.
     """
     try:
         conn = sqlite3.connect(db_path)
-        # Фільтруємо за author — раніше читалася вся база без фільтра
+        # Filter by author — previously the entire DB was read without a filter
         rows = conn.execute(
             "SELECT mentions FROM reposts WHERE author = ? AND mentions IS NOT NULL",
             (username,),
         ).fetchall()
         conn.close()
     except sqlite3.OperationalError as exc:
-        logger.error("Помилка запиту до БД: %s", exc)
+        logger.error("DB query error: %s", exc)
         return []
 
     mentions: list[str] = []
@@ -55,31 +55,31 @@ def top_mentions(username: str, db_path: str) -> list[tuple[str, int]]:
 
 
 def build_prompt(username: str, top_contacts: list[tuple[str, int]]) -> str:
-    """Формує аналітичний промпт для Qwen2.5."""
+    """Builds the analytical prompt for Qwen2.5."""
     contacts_str = ", ".join(
-        f"{handle} ({cnt} разів)" for handle, cnt in top_contacts
+        f"{handle} ({cnt} times)" for handle, cnt in top_contacts
     )
     return (
-        f"Ти — OSINT-аналітик. Проаналізуй взаємодії TikTok-блогера @{username} "
-        f"з його топ-5 контактами: {contacts_str}.\n"
-        "Класифікуй кожен контакт (українською):\n"
-        "1. Найближче коло — регулярні спільні відео;\n"
-        "2. Ситуативні колаборації — стріми, челенджі;\n"
-        "3. Лідери думок — інфлюенсери, яких блогер репостить.\n"
-        "Відповідь — список: нікнейм → категорія (1 рядок)."
+        f"You are an OSINT analyst. Analyze the interactions of TikTok blogger @{username} "
+        f"with their top 5 contacts: {contacts_str}.\n"
+        "Classify each contact (in English):\n"
+        "1. Inner circle — regular shared videos;\n"
+        "2. Situational collaborations — streams, challenges;\n"
+        "3. Opinion leaders — influencers the blogger reposts.\n"
+        "Response — list: nickname → category (1 line)."
     )
 
 
 def classify_contacts(username: str, db_path: str) -> str:
     """
-    Отримує топ-5 контактів, класифікує через Qwen2.5 і повертає текст.
+    Retrieves the top 5 contacts, classifies via Qwen2.5, and returns the text.
 
     Returns:
-        Рядок з відповіддю моделі або повідомлення про помилку.
+        String with the model's response or an error message.
     """
     top = top_mentions(username, db_path)
     if not top:
-        return "Не знайдено жодних @-згадок у базі для цього профілю."
+        return "No @-mentions found in the database for this profile."
 
     prompt = build_prompt(username, top)
 
@@ -96,18 +96,18 @@ def classify_contacts(username: str, db_path: str) -> str:
         )
         if res.status_code == 200:
             return res.json().get("response", "").strip()
-        return f"Помилка Ollama: HTTP {res.status_code}"
+        return f"Ollama error: HTTP {res.status_code}"
     except requests.exceptions.Timeout:
-        return "Помилка: тайм-аут запиту до Ollama."
+        return "Error: timeout for Ollama request."
     except Exception as exc:
-        return f"Помилка: {exc}"
+        return f"Error: {exc}"
 
 
 if __name__ == "__main__":
     import argparse
     logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
-    ap = argparse.ArgumentParser(description="Класифікація топ-5 контактів")
-    ap.add_argument("--user", required=True, help="TikTok нікнейм")
-    ap.add_argument("--db",   required=True, help="Шлях до osint_*.db")
+    ap = argparse.ArgumentParser(description="Classification of top 5 contacts")
+    ap.add_argument("--user", required=True, help="TikTok nickname")
+    ap.add_argument("--db",   required=True, help="Path to osint_*.db")
     args = ap.parse_args()
     print(classify_contacts(args.user, args.db))

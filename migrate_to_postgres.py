@@ -1,36 +1,36 @@
 """
-migrate_to_postgres.py — Міграція osint_*.db → PostgreSQL (SQLAlchemy 2.x)
+migrate_to_postgres.py — Migration osint_*.db → PostgreSQL (SQLAlchemy 2.x)
 
-РЕЛЯЦІЙНА СХЕМА
+RELATIONAL SCHEMA
 ───────────────
-  users          ← унікальні TikTok-цілі (нікнейм як PK-surrogate)
-  videos         ← унікальні TikTok-відео (video_id як PK)
-  user_reposts   ← M:N  users ↔ videos + метадані репосту
-  analysis       ← LLM-теги, прив'язані до videos (1:1)
-  linked_profiles    ← профілі на ін. платформах (FK → users)
-  external_footprint ← maigret/instaloader слід (FK → users)
+  users          ← unique TikTok targets (nickname as PK-surrogate)
+  videos         ← unique TikTok videos (video_id as PK)
+  user_reposts   ← M:N  users ↔ videos + repost metadata
+  analysis       ← LLM tags, tied to videos (1:1)
+  linked_profiles    ← profiles on other platforms (FK → users)
+  external_footprint ← maigret/instaloader trace (FK → users)
 
-ЧИМ ВІДРІЗНЯЄТЬСЯ ВІД SQLite-СХЕМИ
+HOW IT DIFFERS FROM SQLite SCHEMA
 ─────────────────────────────────────
-SQLite  : N ізольованих файлів. video_id може дублюватися між файлами.
-          Всі репости одного профілю — в одному .db.
+SQLite  : N isolated files. video_id can be duplicated between files.
+          All reposts of one profile are in a single .db.
 
-PostgreSQL: Єдина БД.
-  videos(video_id PK)    — один запис на відео, незалежно від кількості цілей.
-  user_reposts(user_id, video_id) UNIQUE — зв'язок M:N, дублікати → ON CONFLICT DO NOTHING.
-  Крос-аналіз стає звичайним JOIN замість міжфайлового сканування.
+PostgreSQL: Single DB.
+  videos(video_id PK)    — one record per video, regardless of targets count.
+  user_reposts(user_id, video_id) UNIQUE — M:N relation, duplicates → ON CONFLICT DO NOTHING.
+  Cross-analysis becomes a regular JOIN instead of cross-file scanning.
 
-ЗАЛЕЖНОСТІ
+DEPENDENCIES
 ──────────
   pip install sqlalchemy>=2.0 psycopg2-binary python-dotenv
 
-ЗАПУСК
+EXECUTION
 ──────
-  # Налаштуйте змінну середовища або відредагуйте DEFAULT_DSN нижче
+  # Configure environment variable or edit DEFAULT_DSN below
   export POSTGRES_DSN="postgresql+psycopg2://user:pass@localhost:5432/osint"
 
-  python migrate_to_postgres.py                            # всі БД
-  python migrate_to_postgres.py --dry-run                  # тільки лог
+  python migrate_to_postgres.py                            # all DBs
+  python migrate_to_postgres.py --dry-run                  # log only
   python migrate_to_postgres.py --source-dir /path/to/dbs
   python migrate_to_postgres.py --dsn postgresql+psycopg2://...
 """
@@ -45,7 +45,7 @@ import sqlite3
 import sys
 from typing import Any
 
-# ── python-dotenv (опційно) ───────────────────────────────────────────────────
+# ── python-dotenv (optional) ───────────────────────────────────────────────────
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -79,7 +79,7 @@ DEFAULT_BATCH = 500
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ORM — Схема PostgreSQL (SQLAlchemy 2.x DeclarativeBase)
+# ORM — PostgreSQL Schema (SQLAlchemy 2.x DeclarativeBase)
 # ══════════════════════════════════════════════════════════════════════════════
 
 class Base(DeclarativeBase):
@@ -87,7 +87,7 @@ class Base(DeclarativeBase):
 
 
 class User(Base):
-    """Унікальна TikTok-ціль (нікнейм як природній ключ)."""
+    """Unique TikTok target (nickname as natural key)."""
     __tablename__ = "users"
 
     id       = Column(Integer, primary_key=True, autoincrement=True)
@@ -105,7 +105,7 @@ class User(Base):
 
 
 class Video(Base):
-    """Унікальне TikTok-відео (video_id як природній PK)."""
+    """Unique TikTok video (video_id as natural PK)."""
     __tablename__ = "videos"
 
     video_id    = Column(String(64), primary_key=True)
@@ -127,8 +127,8 @@ class Video(Base):
 
 class UserRepost(Base):
     """
-    M:N між User і Video + метадані конкретного репосту.
-    UNIQUE (user_id, video_id) → ON CONFLICT DO NOTHING при повторному імпорті.
+    M:N between User and Video + metadata of a specific repost.
+    UNIQUE (user_id, video_id) → ON CONFLICT DO NOTHING on re-import.
     """
     __tablename__ = "user_reposts"
     __table_args__ = (
@@ -152,7 +152,7 @@ class UserRepost(Base):
 
 
 class Analysis(Base):
-    """LLM-теги для одного відео (1:1 з Video)."""
+    """LLM tags for a single video (1:1 with Video)."""
     __tablename__ = "analysis"
 
     video_id       = Column(String(64), ForeignKey("videos.video_id", ondelete="CASCADE"),
@@ -170,7 +170,7 @@ class Analysis(Base):
 
 
 class LinkedProfile(Base):
-    """Профіль цілі на ін. платформі."""
+    """Target's profile on another platform."""
     __tablename__ = "linked_profiles"
     __table_args__ = (
         UniqueConstraint("user_id", "platform", name="uq_user_platform"),
@@ -186,7 +186,7 @@ class LinkedProfile(Base):
 
 
 class ExternalFootprint(Base):
-    """Цифровий слід (maigret / instaloader)."""
+    """Digital footprint (maigret / instaloader)."""
     __tablename__ = "external_footprint"
 
     id       = Column(BigInteger, primary_key=True, autoincrement=True)
@@ -200,11 +200,11 @@ class ExternalFootprint(Base):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Helpers — читання SQLite
+# Helpers — reading SQLite
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _sqlite_read(db_path: str, sql: str, params: tuple = ()) -> list[dict[str, Any]]:
-    """Відкриває SQLite, читає, одразу закриває → без lock-ів."""
+    """Opens SQLite, reads, immediately closes → without locks."""
     conn = sqlite3.connect(db_path, timeout=10)
     conn.row_factory = sqlite3.Row
     try:
@@ -227,18 +227,18 @@ def _username_from_path(db_path: str) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Клас-мігратор
+# Migrator class
 # ══════════════════════════════════════════════════════════════════════════════
 
 class PostgresMigrator:
     """
-    Зчитує N локальних osint_*.db і записує в єдину PostgreSQL.
+    Reads N local osint_*.db and writes to a single PostgreSQL.
 
-    Ключові рішення
+    Key decisions
     ───────────────
     - SQLAlchemy 2.x ORM + Core (pg_insert … ON CONFLICT DO NOTHING)
-    - executemany через Session.execute(stmt, [batch]) → ефективно
-    - dry_run=True → DDL застосовується, дані НЕ записуються
+    - executemany via Session.execute(stmt, [batch]) → efficiently
+    - dry_run=True → DDL applied, data NOT written
     """
 
     def __init__(
@@ -252,32 +252,32 @@ class PostgresMigrator:
         self.batch   = batch
         self._engine = None
 
-    # ── З'єднання / DDL ───────────────────────────────────────────────────────
+    # ── Connection / DDL ───────────────────────────────────────────────────────
 
     def connect(self) -> None:
         if not SQLALCHEMY_AVAILABLE:
             raise RuntimeError(
-                "SQLAlchemy не встановлено.\n"
-                "Виконайте: pip install sqlalchemy>=2.0 psycopg2-binary"
+                "SQLAlchemy is not installed.\n"
+                "Run: pip install sqlalchemy>=2.0 psycopg2-binary"
             )
-        logger.info("Підключення: %s", self.dsn.split("@")[-1])
+        logger.info("Connecting: %s", self.dsn.split("@")[-1])
         self._engine = create_engine(self.dsn, echo=False, future=True)
 
     def apply_schema(self) -> None:
-        """CREATE TABLE IF NOT EXISTS для всіх моделей."""
+        """CREATE TABLE IF NOT EXISTS for all models."""
         Base.metadata.create_all(self._engine)
-        logger.info("✅ Схему PostgreSQL застосовано")
+        logger.info("✅ PostgreSQL schema applied")
 
     def disconnect(self) -> None:
         if self._engine:
             self._engine.dispose()
 
-    # ── Вставка ───────────────────────────────────────────────────────────────
+    # ── Insertion ───────────────────────────────────────────────────────────────
 
     def _upsert_user(self, session: Session, username: str) -> int:
         """
         INSERT INTO users(username) … ON CONFLICT DO NOTHING;
-        SELECT id … — ідемпотентна операція.
+        SELECT id … — idempotent operation.
         """
         stmt = (
             pg_insert(User)
@@ -375,13 +375,13 @@ class PostgresMigrator:
         )
         session.execute(stmt)
 
-    # ── Міграція однієї БД ────────────────────────────────────────────────────
+    # ── Single DB Migration ────────────────────────────────────────────────────
 
     def migrate_one(self, db_path: str) -> dict:
         username = _username_from_path(db_path)
         logger.info("  → @%s  (%s)", username, os.path.basename(db_path))
 
-        # Читаємо all at once → SQLite з'єднання одразу закривається
+        # Reading all at once → SQLite connection closes immediately
         reposts  = _sqlite_read(db_path, "SELECT * FROM reposts")
         analysis: list[dict] = []
         linked:   list[dict] = []
@@ -421,17 +421,17 @@ class PostgresMigrator:
         )
         return counts
 
-    # ── Повна міграція ────────────────────────────────────────────────────────
+    # ── Full migration ────────────────────────────────────────────────────────
 
     def migrate_all(self, source_dir: str) -> list[dict]:
         pattern  = os.path.join(source_dir, "osint_*.db")
         db_files = sorted(glob.glob(pattern))
 
         if not db_files:
-            logger.warning("Не знайдено osint_*.db у %s", source_dir)
+            logger.warning("No osint_*.db found in %s", source_dir)
             return []
 
-        logger.info("Знайдено %d баз для міграції", len(db_files))
+        logger.info("Found %d databases for migration", len(db_files))
         self.apply_schema()
 
         results = []
@@ -450,18 +450,18 @@ class PostgresMigrator:
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Міграція osint_*.db → PostgreSQL (SQLAlchemy)",
+        description="Migration osint_*.db → PostgreSQL (SQLAlchemy)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
     p.add_argument("--dsn",        default=DEFAULT_DSN,
-                   help="PostgreSQL DSN (за замовчуванням: POSTGRES_DSN env)")
+                   help="PostgreSQL DSN (default: POSTGRES_DSN env)")
     p.add_argument("--source-dir", default=os.getcwd(),
-                   help="Директорія з osint_*.db (за замовчуванням: поточна)")
+                   help="Directory with osint_*.db (default: current)")
     p.add_argument("--batch",      type=int, default=DEFAULT_BATCH,
-                   help=f"Розмір пакету (за замовчуванням: {DEFAULT_BATCH})")
+                   help=f"Batch size (default: {DEFAULT_BATCH})")
     p.add_argument("--dry-run",    action="store_true",
-                   help="Показати що буде зроблено, без запису у PostgreSQL")
+                   help="Show what will be done, without writing to PostgreSQL")
     return p
 
 
@@ -473,12 +473,12 @@ def main() -> None:
     )
 
     if args.dry_run:
-        logger.info("=== DRY-RUN — PostgreSQL не буде змінено ===")
-        # У dry-run режимі також будуємо engine для перевірки DSN
+        logger.info("=== DRY-RUN — PostgreSQL will not be changed ===")
+        # In dry-run mode we also build engine to check DSN
     try:
         migrator.connect()
     except Exception as exc:
-        logger.error("Не вдалося підключитися до PostgreSQL: %s", exc)
+        logger.error("Failed to connect to PostgreSQL: %s", exc)
         sys.exit(1)
 
     try:
@@ -488,10 +488,10 @@ def main() -> None:
 
     total = sum(r.get("reposts", 0) for r in results)
     logger.info("\n%s", "=" * 60)
-    logger.info("  Мігровано профілів : %d", len(results))
-    logger.info("  Всього репостів    : %d", total)
+    logger.info("  Migrated profiles : %d", len(results))
+    logger.info("  Total reposts     : %d", total)
     if args.dry_run:
-        logger.info("  (DRY-RUN — реальних записів не зроблено)")
+        logger.info("  (DRY-RUN — no real writes performed)")
     logger.info("=" * 60)
 
 

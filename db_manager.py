@@ -1,245 +1,167 @@
 """
-db_manager.py — DB Abstraction Layer (Repository Pattern)
-
-Єдина точка доступу до даних для всього OSINT-дашборду.
-
-Архітектурне рішення
-────────────────────
-Замість розсипаних `sqlite3.connect(...)` по всьому коду, уся логіка
-запитів зосереджена тут. При переході на PostgreSQL достатньо:
-  1. Змінити _connect() → повернути psycopg2/asyncpg з'єднання.
-  2. Поправити плейсхолдери: SQLite використовує ?, PostgreSQL — %s.
-  3. Більше нічого у решті проєкту не чіпати.
-
-Клас DatabaseManager
-────────────────────
-- Відкриває з'єднання тільки на час конкретного запиту і одразу
-  закриває → жодних «database is locked» при паралельному Streamlit.
-- Всі публічні методи повертають чисті Python-структури (list[dict] /
-  list[tuple] / int), без sqlite3.Row або інших DB-специфічних типів.
-- Кожен метод — це окремий «репозиторій-запит» (один метод = одна
-  відповідальність), що полегшує тестування та мокування.
-
-Використання
-────────────
-    from db_manager import DatabaseManager
-
-    mgr = DatabaseManager("/abs/path/to/osint_user.db")
-    reposts = mgr.get_reposts()          # list[dict]
-    vid_ids = mgr.get_video_ids()        # list[str]
-    count   = mgr.count_reposts()        # int
+db_manager.py — Repository pattern for unified database access.
 """
 
-from __future__ import annotations
-
+import json
 import logging
 import sqlite3
+from typing import Optional, List, Dict, Any
 from contextlib import contextmanager
-from pathlib import Path
-from typing import Generator, Any
+from utils import db_path_for
 
 logger = logging.getLogger(__name__)
 
-# ── Типові аліаси ─────────────────────────────────────────────────────────────
-Row  = dict[str, Any]
-Rows = list[Row]
-
-
 class DatabaseManager:
-    """
-    Адаптер доступу до SQLite-бази одного OSINT-профілю.
+    """Provides methods to access and modify the SQLite database."""
+    
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        self._init_db()
 
-    Parameters
-    ----------
-    db_path : str | Path
-        Абсолютний або відносний шлях до файлу .db.
+    def _connect(self) -> sqlite3.Connection:
+        """Returns a configured SQLite connection with check_same_thread=False."""
+        conn = sqlite3.connect(self.db_path, timeout=10, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        return conn
 
-    Notes
-    -----
-    Для переходу на PostgreSQL:
-        - Замініть `sqlite3.connect` на `psycopg2.connect(dsn=...)`
-        - Замініть `?` на `%s` у всіх SQL-рядках
-        - row_factory більше не потрібен — psycopg2.extras.RealDictCursor
-          повертає dict напряму
-    """
+    def _init_db(self) -> None:
+        """Initializes tables using db_schema."""
+        from db_schema import get_connection
+        conn = get_connection(self.db_path)
+        conn.close()
 
-    def __init__(self, db_path: str | Path) -> None:
-        self.db_path = str(db_path)
+    # ── Reposts (Parser) ──────────────────────────────────────────────────────
 
-    # ── Внутрішній менеджер контексту ─────────────────────────────────────────
-
-    @contextmanager
-    def _connect(self) -> Generator[sqlite3.Connection, None, None]:
-        """
-        Відкриває з'єднання, налаштовує WAL + row_factory,
-        гарантовано закриває після блоку.
-
-        PostgreSQL-замінник:
-            conn = psycopg2.connect(dsn=self.db_path)
-            conn.cursor_factory = psycopg2.extras.RealDictCursor
-        """
-        conn = sqlite3.connect(self.db_path, timeout=10)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.row_factory = sqlite3.Row   # доступ за іменем колонки
-        try:
-            yield conn
-        finally:
-            conn.close()
-
-    def _rows_to_dicts(self, rows: list[sqlite3.Row]) -> Rows:
-        """Конвертує sqlite3.Row → plain dict для незалежності від драйвера."""
-        return [dict(r) for r in rows]
-
-    # ═══════════════════════════════════════════════════════════════════════════
-    # РЕПОСТИ
-    # ═══════════════════════════════════════════════════════════════════════════
-
-    def get_reposts(
-        self,
-        limit: int | None = None,
-        order_by: str = "parsed_at DESC",
-    ) -> Rows:
-        """
-        Повертає всі репости з таблиці reposts.
-
-        Returns
-        -------
-        list[dict] з ключами: video_id, author, author_url, description,
-            hashtags, mentions, sound, likes, comments, shares, url,
-            local_path, parsed_at, analyzed
-        """
-        sql = f"SELECT * FROM reposts ORDER BY {order_by}"
-        params: tuple = ()
-        if limit is not None:
-            sql += " LIMIT ?"
-            params = (limit,)
-
+    def save_repost(self, data: Dict[str, Any]) -> None:
+        """Saves parsed video metadata into the database."""
         with self._connect() as conn:
-            rows = conn.execute(sql, params).fetchall()
-        return self._rows_to_dicts(rows)
+            conn.execute("""
+                INSERT INTO reposts (
+                    video_id, author, url, description, 
+                    hashtags, mentions, local_path, parsed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(video_id) DO UPDATE SET
+                    description = excluded.description,
+                    hashtags = excluded.hashtags,
+                    mentions = excluded.mentions,
+                    local_path = excluded.local_path
+            """, (
+                data["video_id"],
+                data.get("author", ""),
+                data.get("url", ""),
+                data.get("description", ""),
+                json.dumps(data.get("hashtags", [])),
+                json.dumps(data.get("mentions", [])),
+                data.get("local_path", ""),
+                data.get("parsed_at", "")
+            ))
 
-    def get_video_ids(self) -> list[str]:
-        """Повертає лише video_id всіх репостів."""
+    def get_unprocessed_videos(self, limit: int = 100) -> List[sqlite3.Row]:
+        """Returns videos that have not yet been processed by the AI pipeline."""
         with self._connect() as conn:
-            rows = conn.execute("SELECT video_id FROM reposts").fetchall()
-        return [r["video_id"] for r in rows]
+            return conn.execute("""
+                SELECT r.video_id, r.local_path, r.description, r.hashtags
+                FROM reposts r
+                LEFT JOIN analysis a ON r.video_id = a.video_id
+                WHERE a.video_id IS NULL OR a.analyzed = 0
+                LIMIT ?
+            """, (limit,)).fetchall()
 
-    def get_video_ids_with_urls(self) -> list[tuple[str, str]]:
-        """
-        Повертає пари (video_id, url) для крос-аналізу.
-        url може бути None — обробляємо як порожній рядок.
-        """
+    # ── Analysis (AI Pipeline) ────────────────────────────────────────────────
+
+    def save_vision_text(self, video_id: str, visual_context: str, ocr_text: str) -> None:
+        """Saves computer vision results (frames description and OCR)."""
         with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT video_id, COALESCE(url, '') AS url FROM reposts"
-            ).fetchall()
-        return [(r["video_id"], r["url"]) for r in rows]
+            conn.execute("""
+                INSERT INTO analysis (video_id, visual_context, video_text)
+                VALUES (?, ?, ?)
+                ON CONFLICT(video_id) DO UPDATE SET
+                    visual_context = excluded.visual_context,
+                    video_text = excluded.video_text
+            """, (video_id, visual_context, ocr_text))
 
-    def get_video_ids_with_author(self) -> list[tuple[str, str, str]]:
-        """
-        Повертає трійки (video_id, url, author) для крос-аналізу.
-        Потрібен для побудови DataFrame формату Maltego (Source/Target).
-        """
+    def save_audio_text(self, video_id: str, audio_text: str) -> None:
+        """Saves Whisper transcription results."""
         with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT video_id, COALESCE(url, '') AS url, "
-                "COALESCE(author, '') AS author FROM reposts"
-            ).fetchall()
-        return [(r["video_id"], r["url"], r["author"]) for r in rows]
+            conn.execute("""
+                INSERT INTO analysis (video_id, audio_text)
+                VALUES (?, ?)
+                ON CONFLICT(video_id) DO UPDATE SET
+                    audio_text = excluded.audio_text
+            """, (video_id, audio_text))
 
-    def get_reposts_with_mentions(self) -> Rows:
-        """Повертає лише ті репости, де є @-згадки (не порожній JSON)."""
+    def save_semantic_tags(self, video_id: str, tags_data: Dict[str, Any], raw_result: str) -> None:
+        """Saves parsed semantic tags from Qwen and marks video as fully analyzed."""
         with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT author, mentions FROM reposts "
-                "WHERE mentions IS NOT NULL AND mentions != '[]'"
-            ).fetchall()
-        return self._rows_to_dicts(rows)
+            conn.execute("""
+                INSERT INTO analysis (
+                    video_id, interests, hobbies, relations, music_taste, raw_result, analyzed
+                )
+                VALUES (?, ?, ?, ?, ?, ?, 1)
+                ON CONFLICT(video_id) DO UPDATE SET
+                    interests = excluded.interests,
+                    hobbies = excluded.hobbies,
+                    relations = excluded.relations,
+                    music_taste = excluded.music_taste,
+                    raw_result = excluded.raw_result,
+                    analyzed = 1
+            """, (
+                video_id,
+                json.dumps(tags_data.get("interests", [])),
+                json.dumps(tags_data.get("hobbies", [])),
+                json.dumps(tags_data.get("relations", [])),
+                json.dumps(tags_data.get("music_taste", [])),
+                raw_result
+            ))
 
-    def count_reposts(self) -> int:
-        """Загальна кількість рядків у reposts."""
+    def mark_analyzed(self, video_id: str, raw_result: str = "") -> None:
+        """Marks video as analyzed (used as fallback when tags are empty)."""
         with self._connect() as conn:
-            return conn.execute("SELECT COUNT(*) FROM reposts").fetchone()[0]
+            conn.execute("""
+                INSERT INTO analysis (video_id, raw_result, analyzed)
+                VALUES (?, ?, 1)
+                ON CONFLICT(video_id) DO UPDATE SET
+                    raw_result = excluded.raw_result,
+                    analyzed = 1
+            """, (video_id, raw_result))
 
-    def count_mentions(self) -> int:
-        """Кількість відео з @-згадками."""
+    # ── Retrieval (Cross-Analysis & Graph) ────────────────────────────────────
+
+    def get_reposts_with_mentions(self) -> List[sqlite3.Row]:
+        """Returns all reposts that have valid @mentions."""
         with self._connect() as conn:
-            return conn.execute(
-                "SELECT COUNT(*) FROM reposts "
-                "WHERE mentions IS NOT NULL AND mentions != '[]'"
-            ).fetchone()[0]
+            return conn.execute("""
+                SELECT author, mentions 
+                FROM reposts 
+                WHERE mentions IS NOT NULL AND mentions != '[]'
+            """).fetchall()
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # АНАЛІЗ
-    # ═══════════════════════════════════════════════════════════════════════════
-
-    def get_analysis_context(self, limit: int = 50) -> Rows:
-        """
-        JOIN reposts + analysis для RAG-чату.
-        Повертає лише рядки де є хоча б якийсь аналіз (interests != NULL).
-        """
-        sql = """
-            SELECT r.author, r.description,
-                   a.interests, a.hobbies, a.relations,
-                   a.music_taste, a.audio_text
-            FROM reposts r
-            LEFT JOIN analysis a ON r.video_id = a.video_id
-            WHERE a.interests IS NOT NULL
-            ORDER BY r.parsed_at DESC
-            LIMIT ?
-        """
+    def get_video_ids_with_author(self) -> List[sqlite3.Row]:
+        """Returns all video IDs alongside their author (target user)."""
         with self._connect() as conn:
-            rows = conn.execute(sql, (limit,)).fetchall()
-        return self._rows_to_dicts(rows)
+            return conn.execute("""
+                SELECT video_id, author 
+                FROM reposts
+            """).fetchall()
 
-    def get_evidence(self, limit: int = 30) -> Rows:
-        """
-        Дані для вкладки «Доказова база»: відео + OCR + транскрипція.
-        """
-        sql = """
-            SELECT r.video_id, r.author, r.url,
-                   a.visual_context, a.video_text, a.audio_text
-            FROM reposts r
-            LEFT JOIN analysis a ON r.video_id = a.video_id
-            WHERE a.visual_context IS NOT NULL OR a.video_text IS NOT NULL
-            ORDER BY r.parsed_at DESC
-            LIMIT ?
-        """
+    def get_all_analysis_data(self) -> List[sqlite3.Row]:
+        """Returns fully analyzed AI records for report generation."""
         with self._connect() as conn:
-            rows = conn.execute(sql, (limit,)).fetchall()
-        return self._rows_to_dicts(rows)
+            return conn.execute("""
+                SELECT r.description, r.hashtags, 
+                       a.visual_context, a.video_text, a.audio_text, 
+                       a.interests, a.hobbies, a.relations, a.music_taste, a.raw_result
+                FROM reposts r
+                LEFT JOIN analysis a ON r.video_id = a.video_id
+                WHERE a.analyzed = 1
+            """).fetchall()
 
-    # ═══════════════════════════════════════════════════════════════════════════
-    # СЛУЖБОВІ / МЕТАДАНІ
-    # ═══════════════════════════════════════════════════════════════════════════
-
-    def table_exists(self, table_name: str) -> bool:
-        """Перевіряє наявність таблиці у БД."""
+    def get_stats(self) -> Dict[str, int]:
+        """Returns basic database statistics."""
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-                (table_name,),
-            ).fetchone()
-        return row is not None
-
-    def get_linked_profiles(self) -> Rows:
-        """Повертає знайдені профілі на інших платформах."""
-        if not self.table_exists("linked_profiles"):
-            return []
-        with self._connect() as conn:
-            rows = conn.execute("SELECT * FROM linked_profiles").fetchall()
-        return self._rows_to_dicts(rows)
-
-    def get_external_footprint(self) -> Rows:
-        """Повертає цифровий слід (maigret / instaloader)."""
-        if not self.table_exists("external_footprint"):
-            return []
-        with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM external_footprint ORDER BY found_at DESC"
-            ).fetchall()
-        return self._rows_to_dicts(rows)
-
-    def __repr__(self) -> str:
-        return f"DatabaseManager(db='{self.db_path}')"
+            total_reposts = conn.execute("SELECT COUNT(*) FROM reposts").fetchone()[0]
+            analyzed = conn.execute("SELECT COUNT(*) FROM analysis WHERE analyzed = 1").fetchone()[0]
+            return {
+                "total_reposts": total_reposts,
+                "analyzed": analyzed
+            }

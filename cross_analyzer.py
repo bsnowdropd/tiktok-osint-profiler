@@ -1,32 +1,32 @@
 """
-cross_analyzer.py — Крос-аналіз спільних репостів між усіма OSINT-профілями.
+cross_analyzer.py - Cross-analysis of shared reposts between all OSINT profiles.
 
-Алгоритм
-────────
-1. Сканує директорію на osint_*.db файли.
-2. Через DatabaseManager зчитує (video_id, url, author) кожного профілю —
-   з'єднання відразу закривається після читання (→ no "database is locked").
-3. Будує mapping: video_id → {username_1: url, username_2: url, ...}
-4. Залишає лише ті video_id, де ≥ min_users профілів.
-5. Повертає CrossAnalysisResult з трьома форматами даних:
-     .shared          list[SharedVideo]            — для карток UI
-     .overlaps        dict[(user_a, user_b), int]  — для ребер PyVis
+Algorithm
+─────────
+1. Scans the directory for osint_*.db files.
+2. Through DatabaseManager reads (video_id, url, author) of each profile -
+   the connection is closed immediately after reading (→ no "database is locked").
+3. Builds a mapping: video_id → {username_1: url, username_2: url, ...}
+4. Keeps only those video_id where ≥ min_users profiles.
+5. Returns CrossAnalysisResult with three data formats:
+     .shared          list[SharedVideo]            - for UI cards
+     .overlaps        dict[(user_a, user_b), int]  - for PyVis edges
      .to_pairs_df()   DataFrame Target_1/Target_2/Shared_Video_ID/Video_URL
-     .to_maltego_df() DataFrame Source/Target/Edge_Type/Weight  (для Maltego)
+     .to_maltego_df() DataFrame Source/Target/Edge_Type/Weight  (for Maltego)
 
-Використання
+Usage
 ────────────
     from cross_analyzer import find_shared_reposts
 
     result = find_shared_reposts(project_dir="/abs/path")
 
-    # Для AgGrid / st.dataframe
+    # For AgGrid / st.dataframe
     df_pairs   = result.to_pairs_df()
     df_maltego = result.to_maltego_df()
 
-    # Для PyVis-графа
+    # For PyVis graph
     for (u_a, u_b), count in result.overlaps.items():
-        G.add_edge(u_a, u_b, weight=count, label="Спільний контент")
+        G.add_edge(u_a, u_b, weight=count, label="Shared content")
 """
 
 from __future__ import annotations
@@ -47,15 +47,15 @@ logger = logging.getLogger(__name__)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Моделі даних
+# Data Models
 # ══════════════════════════════════════════════════════════════════════════════
 
 @dataclass
 class SharedVideo:
-    """Відео, яке репостнули двоє або більше цілей."""
+    """A video that has been reposted by two or more targets."""
     video_id: str
     url:      str
-    users:    list[str]   # нікнейми цілей у алфавітному порядку
+    users:    list[str]   # target nicknames in alphabetical order
 
     @property
     def user_count(self) -> int:
@@ -69,16 +69,16 @@ class SharedVideo:
 @dataclass
 class CrossAnalysisResult:
     """
-    Результат крос-аналізу всіх баз даних.
+    Result of the cross-analysis of all databases.
 
     Attributes
     ----------
     shared   : list[SharedVideo]
     overlaps : dict[tuple[str, str], int]
-        Пари (user_a, user_b) → кількість спільних відео.
-        Ключ завжди відсортований алфавітно: user_a < user_b.
+        Pairs (user_a, user_b) → number of shared videos.
+        Key is always alphabetically sorted: user_a < user_b.
     stats    : dict
-        Загальна статистика сканування.
+        Overall scanning statistics.
     """
     shared:   list[SharedVideo]          = field(default_factory=list)
     overlaps: dict[tuple[str, str], int] = field(default_factory=dict)
@@ -89,28 +89,28 @@ class CrossAnalysisResult:
         return len(self.shared) == 0
 
     def users_with_overlap(self) -> set[str]:
-        """Всі нікнейми, що мають хоча б один спільний репост."""
+        """All nicknames that have at least one shared repost."""
         out: set[str] = set()
         for u_a, u_b in self.overlaps:
             out.add(u_a)
             out.add(u_b)
         return out
 
-    # ── DataFrame-перетворювачі ────────────────────────────────────────────────
+    # ── DataFrame Converters ────────────────────────────────────────────────
 
     def to_pairs_df(self) -> pd.DataFrame:
         """
-        DataFrame для AgGrid: кожен рядок — одна пара цілей + відео.
+        DataFrame for AgGrid: each row is a pair of targets + video.
 
         Columns
         -------
-        Target_1      : str   — нікнейм першої цілі
-        Target_2      : str   — нікнейм другої цілі
-        Shared_Video_ID : str — TikTok video_id
-        Video_URL     : str   — посилання на відео
+        Target_1      : str   - nickname of the first target
+        Target_2      : str   - nickname of the second target
+        Shared_Video_ID : str - TikTok video_id
+        Video_URL     : str   - video link
 
-        Примітка: якщо відео репостнули N>2 цілей, воно з'явиться у C(N,2)
-        рядках (для кожної пари). Це дозволяє фільтрувати по Target_1/Target_2.
+        Note: if a video was reposted by N>2 targets, it will appear in C(N,2)
+        rows (for each pair). This allows filtering by Target_1/Target_2.
         """
         if self.is_empty:
             return pd.DataFrame(
@@ -127,7 +127,7 @@ class CrossAnalysisResult:
                     "Video_URL":       sv.url,
                 })
         df = pd.DataFrame(rows)
-        # Сортуємо: спочатку найактивніші пари
+        # Sort: most active pairs first
         pair_counts = df.groupby(["Target_1", "Target_2"]).size().rename("_cnt")
         df = df.merge(pair_counts, on=["Target_1", "Target_2"])
         df = df.sort_values(["_cnt", "Target_1", "Target_2"], ascending=[False, True, True])
@@ -136,22 +136,22 @@ class CrossAnalysisResult:
 
     def to_maltego_df(self) -> pd.DataFrame:
         """
-        DataFrame у форматі Maltego CSV-імпорту.
+        DataFrame in Maltego CSV import format.
 
         Columns
         -------
-        Source     : str   — нікнейм 1 (ціль)
-        Target     : str   — нікнейм 2 (ціль)
-        Edge_Type  : str   — завжди "Shared_Repost"
-        Weight     : int   — кількість спільних відео між парою
+        Source     : str   - nickname 1 (target)
+        Target     : str   - nickname 2 (target)
+        Edge_Type  : str   - always "Shared_Repost"
+        Weight     : int   - number of shared videos between the pair
 
-        Використання у Maltego
+        Usage in Maltego
         ──────────────────────
         Import → Import from CSV → Map columns:
           Source    → Entity 1 (Person / Social Media)
           Target    → Entity 2
           Edge_Type → Link Label
-          Weight    → Link Thickness (або Bookmark)
+          Weight    → Link Thickness (or Bookmark)
         """
         if not self.overlaps:
             return pd.DataFrame(
@@ -171,14 +171,14 @@ class CrossAnalysisResult:
         return pd.DataFrame(rows)
 
     def to_maltego_csv_bytes(self) -> bytes:
-        """Повертає CSV як bytes для st.download_button."""
+        """Returns CSV as bytes for st.download_button."""
         df = self.to_maltego_df()
         buf = io.StringIO()
         df.to_csv(buf, index=False, encoding="utf-8")
         return buf.getvalue().encode("utf-8")
 
     def to_pairs_csv_bytes(self) -> bytes:
-        """Повертає повний pairs-CSV як bytes для st.download_button."""
+        """Returns the full pairs-CSV as bytes for st.download_button."""
         df = self.to_pairs_df()
         buf = io.StringIO()
         df.to_csv(buf, index=False, encoding="utf-8")
@@ -186,7 +186,7 @@ class CrossAnalysisResult:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Головна функція
+# Main Function
 # ══════════════════════════════════════════════════════════════════════════════
 
 def find_shared_reposts(
@@ -194,14 +194,14 @@ def find_shared_reposts(
     min_users: int = 2,
 ) -> CrossAnalysisResult:
     """
-    Знаходить відео, які репостнули ≥ `min_users` різних цілей (профілів).
+    Finds videos reposted by ≥ `min_users` different targets (profiles).
 
     Parameters
     ----------
     project_dir : str | None
-        Директорія пошуку osint_*.db. Якщо None — поточна робоча директорія.
+        Directory to search for osint_*.db. If None - current working directory.
     min_users : int
-        Мінімальна кількість профілів для вважання відео «спільним».
+        Minimum number of profiles to consider a video "shared".
 
     Returns
     -------
@@ -212,12 +212,12 @@ def find_shared_reposts(
     db_files = sorted(glob.glob(pattern))
 
     if not db_files:
-        logger.warning("cross_analyzer: баз osint_*.db не знайдено у %s", base_dir)
-        return CrossAnalysisResult(stats={"error": "Баз даних не знайдено"})
+        logger.warning("cross_analyzer: no osint_*.db databases found in %s", base_dir)
+        return CrossAnalysisResult(stats={"error": "No databases found"})
 
-    logger.info("cross_analyzer: сканую %d баз…", len(db_files))
+    logger.info("cross_analyzer: scanning %d databases...", len(db_files))
 
-    # ── Крок 1: video_id → {username: url} ───────────────────────────────────
+    # ── Step 1: video_id → {username: url} ───────────────────────────────────
     video_to_users: dict[str, dict[str, str]] = defaultdict(dict)
     scanned_users: list[str] = []
     total_reposts  = 0
@@ -228,10 +228,10 @@ def find_shared_reposts(
         mgr = DatabaseManager(db_file)
 
         try:
-            # З'єднання відкривається і закривається всередині методу
+            # Connection opens and closes inside the method
             triples = mgr.get_video_ids_with_author()
         except Exception as exc:
-            msg = f"Помилка читання {os.path.basename(db_file)}: {exc}"
+            msg = f"Error reading {os.path.basename(db_file)}: {exc}"
             logger.error(msg)
             errors.append(msg)
             continue
@@ -241,10 +241,10 @@ def find_shared_reposts(
 
         for video_id, url, _author in triples:
             if video_id:
-                # Ключ мапи — нікнейм цілі (не автора відео)
+                # Map key - target nickname (not the video author)
                 video_to_users[video_id][username] = url
 
-    # ── Крок 2: фільтрація ≥ min_users ───────────────────────────────────────
+    # ── Step 2: filter ≥ min_users ───────────────────────────────────────
     shared: list[SharedVideo] = []
     for video_id, user_url_map in video_to_users.items():
         if len(user_url_map) >= min_users:
@@ -257,7 +257,7 @@ def find_shared_reposts(
             ))
     shared.sort(key=lambda v: v.user_count, reverse=True)
 
-    # ── Крок 3: попарні перетини (ребра PyVis) ────────────────────────────────
+    # ── Step 3: pairwise overlaps (PyVis edges) ────────────────────────────────
     overlaps: dict[tuple[str, str], int] = defaultdict(int)
     for sv in shared:
         for u_a, u_b in combinations(sv.users, 2):
@@ -274,7 +274,7 @@ def find_shared_reposts(
         "errors":        errors,
     }
     logger.info(
-        "cross_analyzer: знайдено %d спільних відео у %d парах",
+        "cross_analyzer: found %d shared videos across %d pairs",
         len(shared), len(overlaps),
     )
 
@@ -288,9 +288,9 @@ def find_shared_reposts(
 
 def find_shared_interests(project_dir: str | None = None) -> dict:
     """
-    Знаходить семантичні перетини інтересів між профілями.
-    Витягує теги (interests) з БД кожного користувача та робить запит до Qwen
-    для знаходження спільних контекстів.
+    Finds semantic overlaps in interests between profiles.
+    Extracts tags (interests) from each user's DB and queries Qwen
+    to find shared contexts.
     """
     base_dir = project_dir or os.getcwd()
     pattern  = os.path.join(base_dir, "databases", "osint_*.db")
@@ -298,7 +298,7 @@ def find_shared_interests(project_dir: str | None = None) -> dict:
     db_files = sorted(glob.glob(pattern))
 
     if len(db_files) < 2:
-        return {"error": "Недостатньо баз даних для семантичного аналізу (мінімум 2)."}
+        return {"error": "Not enough databases for semantic analysis (minimum 2)."}
         
     user_profiles = {}
     import sqlite3
@@ -311,29 +311,29 @@ def find_shared_interests(project_dir: str | None = None) -> dict:
             
             all_interests = set()
             for r in rows:
-                # interests зазвичай зберігаються як строка через кому або json
+                # interests are usually stored as a comma-separated string or json
                 for item in str(r[0]).replace('[', '').replace(']', '').replace('"', '').replace("'", '').split(","):
                     item = item.strip()
                     if item:
                         all_interests.add(item)
             if all_interests:
-                user_profiles[username] = ", ".join(list(all_interests)[:50]) # Беремо топ 50 щоб не переповнити контекст
+                user_profiles[username] = ", ".join(list(all_interests)[:50]) # Take top 50 to avoid overflowing the context
         except Exception as e:
-            logger.error("Помилка збору інтересів з %s: %s", db_file, e)
+            logger.error("Error gathering interests from %s: %s", db_file, e)
 
     if len(user_profiles) < 2:
-        return {"error": "Не знайдено достатньо інтересів у базах для порівняння."}
+        return {"error": "Not enough interests found in databases for comparison."}
 
-    # Виклик LLM
+    # LLM Call
     import requests
     try:
         import config
     except ImportError:
-        return {"error": "Не знайдено файл config.py для налаштувань LLM."}
+        return {"error": "config.py file not found for LLM settings."}
         
-    prompt = "Ти — досвідчений OSINT-аналітик. Проаналізуй наступні списки інтересів та тегів користувачів TikTok. Знайди їхні спільні теми, семантичні перетини (наприклад, обидва цікавляться криптою або схожими хобі) та спільні психологічні тригери. Виведи результат у форматі Markdown (список спільних рис).\n\n"
+    prompt = "You are an experienced OSINT analyst. Analyze the following lists of interests and tags from TikTok users. Find their common themes, semantic overlaps (e.g., both are interested in crypto or similar hobbies), and shared psychological triggers. Output the result in Markdown format (a list of common traits).\n\n"
     for user, interests in user_profiles.items():
-        prompt += f"Користувач @{user}: {interests}\n"
+        prompt += f"User @{user}: {interests}\n"
 
     payload = {
         "model": getattr(config, "OLLAMA_MODEL", "qwen2.5"),
@@ -354,34 +354,34 @@ def find_shared_interests(project_dir: str | None = None) -> dict:
                 "users": list(user_profiles.keys())
             }
         else:
-            return {"error": f"LLM повернула статус {res.status_code}"}
+            return {"error": f"LLM returned status {res.status_code}"}
     except Exception as e:
-        return {"error": f"Помилка виклику LLM Qwen: {e}"}
+        return {"error": f"Error calling Qwen LLM: {e}"}
 
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Backward-compat helpers (використовуються у app.py)
+# Backward-compat helpers (used in app.py)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def result_to_dataframe(result: CrossAnalysisResult) -> pd.DataFrame:
-    """Alias → result.to_pairs_df() для зворотної сумісності."""
+    """Alias → result.to_pairs_df() for backward compatibility."""
     return result.to_pairs_df()
 
 
 def overlaps_to_dataframe(result: CrossAnalysisResult) -> pd.DataFrame:
     """
-    DataFrame пар (Профіль A / Профіль B / Спільних відео).
-    Використовується у TAB 5 для таблиці-підсумку.
+    DataFrame of pairs (Profile A / Profile B / Shared videos).
+    Used in TAB 5 for the summary table.
     """
     if not result.overlaps:
         return pd.DataFrame(
-            columns=["Профіль A", "Профіль B", "Спільних відео"]
+            columns=["Profile A", "Profile B", "Shared videos"]
         )
     rows = [
         {
-            "Профіль A":      f"@{u_a}",
-            "Профіль B":      f"@{u_b}",
-            "Спільних відео": count,
+            "Profile A":      f"@{u_a}",
+            "Profile B":      f"@{u_b}",
+            "Shared videos": count,
         }
         for (u_a, u_b), count in sorted(
             result.overlaps.items(), key=lambda x: x[1], reverse=True
@@ -391,7 +391,7 @@ def overlaps_to_dataframe(result: CrossAnalysisResult) -> pd.DataFrame:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Утиліти
+# Utilities
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _username_from_path(db_path: str) -> str:
@@ -407,18 +407,18 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 
     res = find_shared_reposts()
-    print("\n=== СТАТИСТИКА ===")
+    print("\n=== STATISTICS ===")
     print(json.dumps(res.stats, ensure_ascii=False, indent=2))
 
     if res.shared:
-        print(f"\n=== СПІЛЬНІ ВІДЕО (топ-10 з {len(res.shared)}) ===")
+        print(f"\n=== SHARED VIDEOS (top 10 of {len(res.shared)}) ===")
         for sv in res.shared[:10]:
             print(f"  {sv.video_id}  →  {sv.users_display}")
 
     if res.overlaps:
-        print("\n=== ПЕРЕТИНИ (попарно) ===")
+        print("\n=== OVERLAPS (pairwise) ===")
         for (a, b), cnt in sorted(res.overlaps.items(), key=lambda x: x[1], reverse=True):
-            print(f"  @{a}  ↔  @{b}  : {cnt} відео")
+            print(f"  @{a}  ↔  @{b}  : {cnt} videos")
 
     print("\n=== MALTEGO CSV (preview) ===")
     print(res.to_maltego_df().to_string(index=False))

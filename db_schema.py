@@ -1,105 +1,92 @@
 """
-db_schema.py — Єдина точка ініціалізації схеми SQLite.
+db_schema.py — Unified SQLite schema for the entire OSINT pipeline.
 
-Раніше кожен модуль мав свій `init_db_structure()` з різним набором
-колонок (конфлікт схем). Тепер одна функція — одна правда про структуру БД.
+Exports `get_connection(db_path)` which automatically initializes
+tables if they do not exist.
 """
 
 import sqlite3
 import logging
+from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
-# ── Повна схема таблиці analysis ─────────────────────────────────────────────
-# Будь-яка нова колонка додається ТІЛЬКИ тут.
-ANALYSIS_COLUMNS: dict[str, str] = {
-    "video_id":       "TEXT PRIMARY KEY",
-    "interests":      "TEXT",
-    "hobbies":        "TEXT",
-    "relations":      "TEXT",
-    "music_taste":    "TEXT",
-    "raw_result":     "TEXT",          # зберігає summary (1–2 слова)
-    "visual_context": "TEXT",
-    "video_text":     "TEXT",
-    "audio_text":     "TEXT",
-    "analyzed_at":    "DATETIME DEFAULT CURRENT_TIMESTAMP",
-}
+
+def get_connection(db_path: str) -> sqlite3.Connection:
+    """
+    Connects to the database and initializes the schema if it's a new database.
+    
+    Args:
+        db_path: Path to the SQLite database (e.g., databases/osint_username.db)
+    Returns:
+        Configured sqlite3.Connection object.
+    """
+    conn = sqlite3.connect(db_path, timeout=10)
+    conn.row_factory = sqlite3.Row
+    _init_tables(conn)
+    return conn
 
 
-def init_db(conn: sqlite3.Connection) -> None:
-    """
-    Створює/мігрує всі таблиці бази даних.
-    Безпечно: якщо таблиця вже існує — лише додає відсутні колонки.
-    """
-    # ── reposts ───────────────────────────────────────────────────────────────
-    conn.execute("""
+def _init_tables(conn: sqlite3.Connection) -> None:
+    """Creates all necessary tables for the pipeline."""
+    c = conn.cursor()
+
+    # 1. Parsed videos (metadata)
+    c.execute("""
         CREATE TABLE IF NOT EXISTS reposts (
-            video_id    TEXT PRIMARY KEY,
-            author      TEXT,
-            author_url  TEXT,
+            video_id TEXT PRIMARY KEY,
+            author TEXT,
+            url TEXT,
             description TEXT,
-            hashtags    TEXT,
-            mentions    TEXT,
-            sound       TEXT,
-            likes       TEXT,
-            comments    TEXT,
-            shares      TEXT,
-            url         TEXT,
-            local_path  TEXT,
-            parsed_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
-            analyzed    INTEGER DEFAULT 0
+            hashtags TEXT,     -- JSON array
+            local_path TEXT,   -- Path to downloaded mp4
+            parsed_at DATETIME,
+            mentions TEXT      -- JSON array of @mentions
         )
     """)
 
-    # ── analysis ──────────────────────────────────────────────────────────────
-    # Будуємо CREATE TABLE з повним списком колонок
-    col_defs = ",\n            ".join(
-        f"{name} {typedef}" for name, typedef in ANALYSIS_COLUMNS.items()
-    )
-    conn.execute(f"""
+    # 2. AI analysis results
+    c.execute("""
         CREATE TABLE IF NOT EXISTS analysis (
-            {col_defs},
-            FOREIGN KEY (video_id) REFERENCES reposts(video_id)
+            video_id TEXT PRIMARY KEY,
+            visual_context TEXT,
+            video_text TEXT,
+            audio_text TEXT,
+            interests TEXT,
+            hobbies TEXT,
+            relations TEXT,
+            music_taste TEXT,
+            raw_result TEXT,
+            analyzed INTEGER DEFAULT 0,
+            FOREIGN KEY(video_id) REFERENCES reposts(video_id)
         )
     """)
 
-    # ── Міграція: додаємо відсутні колонки (ALTER TABLE ADD COLUMN) ───────────
-    existing = {row[1] for row in conn.execute("PRAGMA table_info(analysis)").fetchall()}
-    for col_name, col_type in ANALYSIS_COLUMNS.items():
-        if col_name not in existing and col_name != "video_id":
-            # Витягуємо базовий тип без DEFAULT, щоб ALTER TABLE не впав
-            base_type = col_type.split()[0]
-            logger.info("Міграція БД: додаю колонку analysis.%s (%s)", col_name, base_type)
-            conn.execute(f"ALTER TABLE analysis ADD COLUMN {col_name} {base_type}")
-
-    # ── linked_profiles ───────────────────────────────────────────────────────
-    conn.execute("""
+    # 3. External platform presence (cross_platform_linker.py)
+    c.execute("""
         CREATE TABLE IF NOT EXISTS linked_profiles (
             platform TEXT PRIMARY KEY,
-            url      TEXT
-        )
-    """)
-
-    # ── external_footprint ───────────────────────────────────────────────────
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS external_footprint (
-            id        INTEGER PRIMARY KEY AUTOINCREMENT,
-            platform  TEXT NOT NULL,
-            url       TEXT,
-            bio_text  TEXT,
-            found_at  TEXT NOT NULL
+            url TEXT,
+            found_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
     conn.commit()
-    logger.debug("Схему БД ініціалізовано/перевірено.")
 
 
-def get_connection(db_path: str) -> sqlite3.Connection:
-    """Відкриває з'єднання, застосовує WAL-режим та ініціалізує схему."""
-    conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA journal_mode=WAL")   # краща конкурентність
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.row_factory = sqlite3.Row
-    init_db(conn)
-    return conn
+@contextmanager
+def transaction(db_path: str):
+    """
+    Context manager for safe transactions.
+    Automatically commits on success or rolls back on exception.
+    """
+    conn = get_connection(db_path)
+    try:
+        yield conn
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        logger.error("Transaction rolled back due to error: %s", e)
+        raise
+    finally:
+        conn.close()

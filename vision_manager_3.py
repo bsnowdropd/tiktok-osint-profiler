@@ -1,11 +1,11 @@
 """
-vision_manager_3.py — Візуальний аналіз: OCR (EasyOCR) + Moondream.
+vision_manager_3.py — Visual analysis: OCR (EasyOCR) + Moondream.
 
-Зміни (рефакторинг):
-  - easyocr.Reader() перенесено з рівня модуля у lazy-singleton get_reader()
-  - Додано threading.Lock навколо reader для thread-safety (EasyOCR не thread-safe)
-  - Додано обробку помилок з порожніми результатами (ERROR_CANT_OPEN/ERROR_NO_FILE) для уникнення race condition.
-  - Додано простий fallback на ffmpeg (через subprocess), якщо cv2 не може відкрити відео.
+Changes (refactoring):
+  - easyocr.Reader() moved from module level to lazy-singleton get_reader()
+  - Added threading.Lock around reader for thread-safety (EasyOCR is not thread-safe)
+  - Added error handling for empty results (ERROR_CANT_OPEN/ERROR_NO_FILE) to avoid race conditions.
+  - Added simple fallback to ffmpeg (via subprocess) if cv2 cannot open the video.
 """
 
 import base64
@@ -34,15 +34,15 @@ def get_reader():
         with _reader_lock:
             if _reader is None:
                 import easyocr
-                logger.info("Завантаження EasyOCR (UK, EN, RU)...")
+                logger.info("Loading EasyOCR (UK, EN, RU)...")
                 _reader = easyocr.Reader(["uk", "en", "ru"], gpu=True)
     return _reader
 
 def extract_frames_ffmpeg(video_path: str, num_frames: int = 3) -> list[str]:
-    """Fallback: витягує кадри через ffmpeg, якщо cv2 не працює."""
+    """Fallback: extracts frames via ffmpeg if cv2 fails."""
     frames_b64 = []
     try:
-        # Отримуємо тривалість відео
+        # Get video duration
         probe = subprocess.run(
             ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", video_path],
             capture_output=True, text=True, timeout=5
@@ -68,11 +68,11 @@ def extract_frames_ffmpeg(video_path: str, num_frames: int = 3) -> list[str]:
             if os.path.exists(tmp_name):
                 os.remove(tmp_name)
     except Exception as e:
-        logger.error("Помилка ffmpeg fallback для %s: %s", video_path, e)
+        logger.error("ffmpeg fallback error for %s: %s", video_path, e)
     return frames_b64
 
 def get_frames_and_text(video_path: str, num_frames: int = 3) -> tuple[list[str], str]:
-    """Витягує рівновіддалені кадри з відео та розпізнає текст."""
+    """Extracts equidistant frames from video and recognizes text."""
     frames_b64: list[str] = []
     ocr_parts: list[str] = []
     
@@ -99,10 +99,10 @@ def get_frames_and_text(video_path: str, num_frames: int = 3) -> tuple[list[str]
             frames_b64.append(base64.b64encode(buf).decode("utf-8"))
         cap.release()
     else:
-        logger.warning("cv2 не відкрив %s, спроба ffmpeg...", video_path)
+        logger.warning("cv2 could not open %s, trying ffmpeg...", video_path)
         cap.release()
         frames_b64 = extract_frames_ffmpeg(video_path, num_frames)
-        # Для ffmpeg-fallback пропускаємо OCR (або можна розпізнавати з картинок, але це fallback)
+        # For ffmpeg-fallback skip OCR (or could recognize from images, but this is a fallback)
         
     return frames_b64, " | ".join(ocr_parts)
 
@@ -124,15 +124,15 @@ def get_vision_desc(frame_b64: str) -> str:
         if res.status_code == 200:
             return res.json().get("response", "").strip()
     except Exception as exc:
-        logger.debug("Помилка Moondream: %s", exc)
+        logger.debug("Moondream error: %s", exc)
     return ""
 
 def process_single_video(row) -> tuple[str, str, str]:
     v_id, local_path = row["video_id"], row["local_path"]
 
     if not local_path or not Path(local_path).exists():
-        logger.warning("Файл не знайдено: %s (ID: %s)", local_path, v_id)
-        # Записуємо маркер, щоб більше не обробляти це відсутнє відео
+        logger.warning("File not found: %s (ID: %s)", local_path, v_id)
+        # Write marker to avoid processing this missing video again
         return v_id, "ERROR_NO_FILE", "ERROR_NO_FILE"
 
     frames_b64, screen_text = get_frames_and_text(local_path, num_frames=3)
@@ -144,7 +144,7 @@ def process_single_video(row) -> tuple[str, str, str]:
             descriptions.append(f"[Frame {i}]: {desc}")
 
     if not descriptions:
-        # Маркер, що відео було битим, але файл існував
+        # Marker that video was broken, but file existed
         return v_id, "ERROR_CANT_OPEN", "ERROR_CANT_OPEN"
 
     return v_id, " ".join(descriptions), screen_text
@@ -166,11 +166,11 @@ def process_batch(limit: int = 100, max_workers: int = 3, db_path: str = "osint_
     ).fetchall()
 
     if not rows:
-        logger.info("Нових відео для візуального аналізу не знайдено.")
+        logger.info("No new videos found for visual analysis.")
         conn.close()
         return
 
-    logger.info("Обробляємо %d відео у %d потоках...", len(rows), max_workers)
+    logger.info("Processing %d videos in %d threads...", len(rows), max_workers)
 
     results: list[tuple[str, str, str]] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
@@ -178,12 +178,12 @@ def process_batch(limit: int = 100, max_workers: int = 3, db_path: str = "osint_
             if res:
                 results.append(res)
                 logger.info(
-                    "Оброблено: %s | OCR: %.20s… | Vision: %.40s…",
+                    "Processed: %s | OCR: %.20s… | Vision: %.40s…",
                     res[0], res[2], res[1],
                 )
 
     if results:
-        logger.info("Збереження %d результатів у БД...", len(results))
+        logger.info("Saving %d results to DB...", len(results))
         for v_id, visual_desc, screen_text in results:
             conn.execute(
                 """
@@ -197,7 +197,7 @@ def process_batch(limit: int = 100, max_workers: int = 3, db_path: str = "osint_
         conn.commit()
 
     conn.close()
-    logger.info("Візуальний аналіз завершено!")
+    logger.info("Visual analysis completed!")
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")

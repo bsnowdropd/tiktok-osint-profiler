@@ -1,15 +1,15 @@
 """
-tiktok_parser_cdp.py — Парсер TikTok-репостів у повноекранному режимі.
+tiktok_parser_cdp.py — TikTok repost parser in fullscreen mode.
 
-Зміни (рефакторинг):
-  - КРИТИЧНИЙ БАГ: `mentions: str = ""` перенесено в кінець dataclass Repost
-    (Python забороняє поле з дефолтом перед обов'язковими — TypeError при кожному викл.)
-  - INSERT OR REPLACE → ON CONFLICT DO UPDATE що НЕ скидає analyzed=1
-  - pickle → JSON для збереження/завантаження cookies (безпека)
-  - VIDEO_DIR.mkdir() прибрано з рівня модуля → викликається всередині функції
-  - Jitter до SCROLL_PAUSE (антибот)
-  - init_db замінено на db_schema.get_connection()
-  - Імпорт config для єдиних констант
+Changes (refactoring):
+  - CRITICAL BUG: `mentions: str = ""` moved to the end of dataclass Repost
+    (Python forbids a field with a default before mandatory ones — TypeError on every call)
+  - INSERT OR REPLACE → ON CONFLICT DO UPDATE which DOES NOT reset analyzed=1
+  - pickle → JSON for saving/loading cookies (security)
+  - VIDEO_DIR.mkdir() removed from module level → called inside the function
+  - Jitter added to SCROLL_PAUSE (anti-bot)
+  - init_db replaced with db_schema.get_connection()
+  - Imported config for unified constants
 """
 
 import time
@@ -35,8 +35,8 @@ from db_schema import get_connection
 
 logger = logging.getLogger(__name__)
 
-# ── Конфігурація ──────────────────────────────────────────────────────────────
-COOKIES_FILE = Path(config.COOKIES_FILE)   # тепер JSON, не pickle
+# ── Configuration ──────────────────────────────────────────────────────────────
+COOKIES_FILE = Path(config.COOKIES_FILE)   # now JSON, not pickle
 VIDEO_DIR    = Path(config.VIDEO_DIR)
 
 
@@ -45,33 +45,33 @@ VIDEO_DIR    = Path(config.VIDEO_DIR)
 @dataclass
 class Repost:
     """
-    DTO метаданих одного TikTok-репосту.
+    DTO for metadata of a single TikTok repost.
 
-    Поля БЕЗ дефолту (обов'язкові) йдуть ПЕРШИМИ.
-    Поля З дефолтом — в кінці (вимога Python dataclasses).
+    Fields WITHOUT a default (mandatory) go FIRST.
+    Fields WITH a default — at the end (Python dataclasses requirement).
     """
     video_id:   str
     author:     str
     author_url: str
     description: str
-    hashtags:   str      # JSON-рядок зі списком хештегів
+    hashtags:   str      # JSON string with a list of hashtags
     sound:      str
     likes:      str
     comments:   str
     shares:     str
     url:        str
-    # ── поля з дефолтом (завжди в кінці) ─────────────────────────────────────
+    # ── fields with a default (always at the end) ────────────────────────────
     local_path: str = ""
-    mentions:   str = ""   # JSON-рядок зі списком @-згадок
+    mentions:   str = ""   # JSON string with a list of @-mentions
 
 
 # ── DB ────────────────────────────────────────────────────────────────────────
 
 def save_repost(conn: sqlite3.Connection, r: Repost) -> bool:
     """
-    Зберігає Repost у БД.
-    ON CONFLICT DO UPDATE зберігає значення `analyzed` — відео не буде
-    повторно оброблене LLM при наступному запуску парсера.
+    Saves Repost to the DB.
+    ON CONFLICT DO UPDATE preserves the `analyzed` value — the video will not be
+    re-processed by LLM during the next run of the parser.
     """
     try:
         conn.execute(
@@ -86,7 +86,7 @@ def save_repost(conn: sqlite3.Connection, r: Repost) -> bool:
                 hashtags    = excluded.hashtags,
                 mentions    = excluded.mentions,
                 parsed_at   = CURRENT_TIMESTAMP
-                -- analyzed НЕ оновлюємо: вже оброблені відео не перепрацьовуються
+                -- analyzed IS NOT updated: already processed videos are not re-worked
             """,
             (
                 r.video_id, r.author, r.author_url, r.description,
@@ -97,7 +97,7 @@ def save_repost(conn: sqlite3.Connection, r: Repost) -> bool:
         conn.commit()
         return True
     except Exception as exc:
-        logger.error("Помилка збереження %s у БД: %s", r.video_id, exc)
+        logger.error("Error saving %s to DB: %s", r.video_id, exc)
         return False
 
 
@@ -121,17 +121,17 @@ def _create_driver() -> webdriver.Chrome:
     return driver
 
 
-# ── Cookies (JSON замість pickle) ─────────────────────────────────────────────
+# ── Cookies (JSON instead of pickle) ──────────────────────────────────────────
 
 def _save_cookies(driver: webdriver.Chrome) -> None:
-    """Зберігає cookies у JSON (замість небезпечного pickle)."""
+    """Saves cookies to JSON (instead of insecure pickle)."""
     cookies = driver.get_cookies()
     COOKIES_FILE.write_text(json.dumps(cookies, ensure_ascii=False), encoding="utf-8")
-    logger.info("Cookies збережено → %s", COOKIES_FILE)
+    logger.info("Cookies saved → %s", COOKIES_FILE)
 
 
 def _load_cookies(driver: webdriver.Chrome) -> bool:
-    """Завантажує cookies з JSON-файлу."""
+    """Loads cookies from a JSON file."""
     if not COOKIES_FILE.exists():
         return False
     driver.get("https://www.tiktok.com")
@@ -139,7 +139,7 @@ def _load_cookies(driver: webdriver.Chrome) -> bool:
     try:
         cookies = json.loads(COOKIES_FILE.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as exc:
-        logger.warning("Не вдалося прочитати cookies: %s", exc)
+        logger.warning("Failed to read cookies: %s", exc)
         return False
 
     for cookie in cookies:
@@ -147,18 +147,18 @@ def _load_cookies(driver: webdriver.Chrome) -> bool:
             driver.add_cookie(cookie)
         except Exception:
             pass
-    logger.info("Cookies завантажено з %s", COOKIES_FILE)
+    logger.info("Cookies loaded from %s", COOKIES_FILE)
     return True
 
 
 def _wait_for_manual_login(driver: webdriver.Chrome) -> None:
     driver.get("https://www.tiktok.com/login")
     logger.warning("=" * 50)
-    logger.warning("ПОТРІБЕН ЛОГІН! Залогінься вручну у відкритому браузері.")
+    logger.warning("LOGIN REQUIRED! Log in manually in the opened browser.")
     logger.warning("=" * 50)
     WebDriverWait(driver, 300).until(lambda d: "login" not in d.current_url)
     time.sleep(3)
-    logger.info("Успішний вхід!")
+    logger.info("Login successful!")
 
 
 def _ensure_authenticated(driver: webdriver.Chrome) -> None:
@@ -166,19 +166,19 @@ def _ensure_authenticated(driver: webdriver.Chrome) -> None:
         driver.refresh()
         time.sleep(4)
         if "login" not in driver.current_url:
-            logger.info("Авторизація через cookies успішна.")
+            logger.info("Authorization via cookies successful.")
             return
-        logger.warning("Cookies застаріли, потрібен повторний логін.")
+        logger.warning("Cookies expired, manual login required.")
 
     _wait_for_manual_login(driver)
     _save_cookies(driver)
 
 
-# ── Завантаження через TikWM API ──────────────────────────────────────────────
+# ── Downloading via TikWM API ──────────────────────────────────────────────────
 
 def download_video_tikwm(video_id: str) -> str | None:
-    """Завантажує відео/фото-карусель через TikWM API."""
-    VIDEO_DIR.mkdir(exist_ok=True)   # створюємо тільки при реальному використанні
+    """Downloads video/photo-carousel via TikWM API."""
+    VIDEO_DIR.mkdir(exist_ok=True)   # create only on actual usage
     output_path = VIDEO_DIR / f"{video_id}.mp4"
 
     api_url = f"https://www.tikwm.com/api/?url=https://www.tiktok.com/video/{video_id}"
@@ -189,9 +189,9 @@ def download_video_tikwm(video_id: str) -> str | None:
         if data.get("code") == 0:
             video_data = data["data"]
             
-            # Якщо це фото-карусель (немає play_url, але є images)
+            # If it is a photo-carousel (no play_url, but has images)
             if "images" in video_data and not video_data.get("play"):
-                logger.warning("Відео %s є фотокаруселлю, пропускаємо збереження mp4.", video_id)
+                logger.warning("Video %s is a photo carousel, skipping mp4 save.", video_id)
                 return None
 
             play_url = video_data.get("play")
@@ -202,28 +202,28 @@ def download_video_tikwm(video_id: str) -> str | None:
                     for chunk in vid_res.iter_content(chunk_size=8192):
                         fh.write(chunk)
                 
-                # Валідація розміру (якщо пустий або < 1KB)
+                # Size validation (if empty or < 1KB)
                 if os.path.exists(output_path) and os.path.getsize(output_path) < 1024:
                     os.remove(output_path)
-                    logger.warning("Завантажений файл %s надто малий (битий), видалено.", video_id)
+                    logger.warning("Downloaded file %s is too small (corrupted), deleted.", video_id)
                     return None
                     
                 return str(output_path)
         else:
             logger.debug("TikWM API: %s", data.get("msg"))
     except Exception as exc:
-        logger.error("Помилка TikWM для %s: %s", video_id, exc)
+        logger.error("TikWM error for %s: %s", video_id, exc)
     return None
 
 
-# ── Головна логіка ────────────────────────────────────────────────────────────
+# ── Main Logic ────────────────────────────────────────────────────────────────
 
 def parse_fullscreen_feed(
     username: str,
     db_path: str = "osint_unknown.db",
     limit: int = 100,
 ) -> list[dict]:
-    """Гортає стрічку репостів TikTok і зберігає метадані у БД."""
+    """Scrolls TikTok reposts feed and saves metadata to DB."""
     conn = get_connection(db_path)
     driver = _create_driver()
     results: list[dict] = []
@@ -232,11 +232,11 @@ def parse_fullscreen_feed(
         _ensure_authenticated(driver)
 
         profile_url = f"https://www.tiktok.com/@{username}?tab=repost"
-        logger.info("Відкриваємо: %s", profile_url)
+        logger.info("Opening: %s", profile_url)
         driver.get(profile_url)
         time.sleep(3)
 
-        # ── Клік на вкладку "Репости" ─────────────────────────────────────────
+        # ── Click on "Reposts" tab ────────────────────────────────────────────
         tab_selectors = [
             '[data-e2e="repost-tab"]',
             '//span[contains(text(),"Repost") or contains(text(),"Репост")]',
@@ -252,19 +252,19 @@ def parse_fullscreen_feed(
                 )
                 driver.execute_script("arguments[0].click();", el)
                 time.sleep(3)
-                logger.info("[✓] Вкладку 'Репости' відкрито.")
+                logger.info("[✓] 'Reposts' tab opened.")
                 clicked = True
                 break
             except Exception:
                 continue
 
         if not clicked:
-            logger.warning("Не вдалося знайти вкладку репостів.")
+            logger.warning("Failed to find reposts tab.")
             return []
 
         time.sleep(5)
 
-        # ── Клік на перше відео ───────────────────────────────────────────────
+        # ── Click on the first video ──────────────────────────────────────────
         video_selectors = [
             '[data-e2e="user-post-item"] a',
             'div[class*="DivItemContainerV2"] a',
@@ -279,7 +279,7 @@ def parse_fullscreen_feed(
                     if "/video/" in href or "/photo/" in href:
                         driver.execute_script("arguments[0].click();", vid)
                         time.sleep(4)
-                        logger.info("[✓] Перше відео відкрито.")
+                        logger.info("[✓] First video opened.")
                         opened = True
                         break
                 if opened:
@@ -288,14 +288,14 @@ def parse_fullscreen_feed(
                 continue
 
         if not opened:
-            logger.error("Не вдалося відкрити перше відео.")
+            logger.error("Failed to open the first video.")
             return []
 
-        logger.info("Починаємо обробку (макс. %d постів)...", limit)
+        logger.info("Starting processing (max %d posts)...", limit)
         seen_ids: set[str] = set()
 
         for i in range(limit):
-            # Jitter-пауза (антибот): випадкова затримка у заданому діапазоні
+            # Jitter pause (anti-bot): random delay in a specified range
             pause = random.uniform(config.SCROLL_PAUSE_MIN, config.SCROLL_PAUSE_MAX)
             time.sleep(pause)
 
@@ -303,19 +303,19 @@ def parse_fullscreen_feed(
             clean_url = current_url.split("?")[0]
             video_id = clean_url.rstrip("/").split("/")[-1]
 
-            # Зупинка при дублікаті або нечисловому ID
+            # Stop on duplicate or non-numeric ID
             if video_id in seen_ids:
-                logger.info("Кінець стрічки (дублікат ID %s).", video_id)
+                logger.info("End of feed (duplicate ID %s).", video_id)
                 break
             if not video_id.isdigit():
-                logger.info("Нечисловий URL-сегмент (%s) — можлива зміна сторінки, продовжуємо.", video_id)
+                logger.info("Non-numeric URL segment (%s) — possible page change, continuing.", video_id)
                 webdriver.ActionChains(driver).send_keys(Keys.ARROW_DOWN).perform()
                 continue
 
             seen_ids.add(video_id)
-            logger.info("[%d/%d] Обробка: %s", i + 1, limit, video_id)
+            logger.info("[%d/%d] Processing: %s", i + 1, limit, video_id)
 
-            # ── Витягуємо метадані ────────────────────────────────────────────
+            # ── Extract metadata ──────────────────────────────────────────────
             author = "unknown"
             try:
                 author = driver.find_element(
@@ -335,14 +335,14 @@ def parse_fullscreen_feed(
             except Exception:
                 pass
 
-            # ── Завантаження відео ────────────────────────────────────────────
+            # ── Download video ────────────────────────────────────────────────
             local_path = download_video_tikwm(video_id)
             if local_path:
-                logger.info("  [✓] Збережено: %s", local_path)
+                logger.info("  [✓] Saved: %s", local_path)
             else:
-                logger.warning("  [!] Не вдалося завантажити відео.")
+                logger.warning("  [!] Failed to download video.")
 
-            # ── Зберігаємо у БД ───────────────────────────────────────────────
+            # ── Save to DB ────────────────────────────────────────────────────
             r = Repost(
                 video_id=video_id,
                 author=author,
@@ -359,14 +359,14 @@ def parse_fullscreen_feed(
 
             webdriver.ActionChains(driver).send_keys(Keys.ARROW_DOWN).perform()
 
-        logger.info("Парсинг завершено. Нових записів: %d", len(results))
+        logger.info("Parsing completed. New records: %d", len(results))
         return results
 
     except KeyboardInterrupt:
-        logger.warning("Перервано користувачем.")
+        logger.warning("Interrupted by user.")
         return results
     except Exception as exc:
-        logger.error("Неочікувана помилка: %s", exc, exc_info=True)
+        logger.error("Unexpected error: %s", exc, exc_info=True)
         return results
     finally:
         driver.quit()
@@ -376,8 +376,8 @@ def parse_fullscreen_feed(
 if __name__ == "__main__":
     import argparse
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-    ap = argparse.ArgumentParser(description="TikTok Парсер (CDP)")
-    ap.add_argument("--user",  required=True, help="Нікнейм TikTok")
+    ap = argparse.ArgumentParser(description="TikTok Parser (CDP)")
+    ap.add_argument("--user",  required=True, help="TikTok username")
     ap.add_argument("--limit", type=int, default=100)
     args = ap.parse_args()
     from utils import db_path_for

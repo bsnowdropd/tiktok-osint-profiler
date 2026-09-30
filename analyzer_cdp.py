@@ -1,14 +1,14 @@
 """
-analyzer_cdp.py — Fallback LLM-аналіз (крок 5): text-only Qwen2.5.
+analyzer_cdp.py — Fallback LLM-analysis (step 5): text-only Qwen2.5.
 
-Обробляє відео, що залишилися після Субліматора (analyzed=0, без візуального контексту).
+Processes videos left after the Sublimator (analyzed=0, without visual context).
 
-Зміни (рефакторинг):
-  - _safe_str → utils.safe_str (прибрано дублікат)
+Changes (refactoring):
+  - _safe_str → utils.safe_str (duplicate removed)
   - init_db_structure → db_schema.get_connection()
-  - Конфігурація з config.py
-  - executor.map → futures зі збором по мірі готовності (не тримаємо всі в RAM)
-  - Retry-логіка для Ollama (3 спроби)
+  - Configuration from config.py
+  - executor.map → futures collecting as they finish (do not keep all in RAM)
+  - Retry-logic for Ollama (3 attempts)
 """
 
 import json
@@ -29,51 +29,51 @@ _RETRY_DELAY = 5
 
 
 def _call_ollama_with_retry(payload: dict, timeout: int) -> dict | None:
-    """Надсилає запит до Ollama з retry."""
+    """Sends a request to Ollama with retry."""
     for attempt in range(1, _RETRY_COUNT + 1):
         try:
             res = requests.post(config.OLLAMA_URL, json=payload, timeout=timeout)
             if res.status_code == 200:
                 return res.json()
-            logger.warning("Ollama HTTP %d (спроба %d/%d)", res.status_code, attempt, _RETRY_COUNT)
+            logger.warning("Ollama HTTP %d (attempt %d/%d)", res.status_code, attempt, _RETRY_COUNT)
         except requests.exceptions.Timeout:
-            logger.warning("Ollama тайм-аут (спроба %d/%d)", attempt, _RETRY_COUNT)
+            logger.warning("Ollama timeout (attempt %d/%d)", attempt, _RETRY_COUNT)
         except Exception as exc:
-            logger.error("Ollama помилка: %s", exc)
+            logger.error("Ollama error: %s", exc)
         if attempt < _RETRY_COUNT:
             time.sleep(_RETRY_DELAY)
     return None
 
 
 def analyze_repost_fallback(data: dict) -> tuple[str, dict] | None:
-    """Базовий аналіз відео (без візуального контексту) — тільки текст та звук."""
+    """Basic video analysis (no visual context) — text and sound only."""
     v_id   = data.get("video_id", "unknown")
     desc   = data.get("description", "")
     sound  = data.get("sound", "")
     author = data.get("author", "unknown")
 
     prompt = f"""
-    Витягни СТИСЛІ ключові теги з репосту TikTok.
-    Візуального опису немає — орієнтуйся лише на текст, хештеги та звук.
+    Extract BRIEF key tags from a TikTok repost.
+    There is no visual description — rely only on text, hashtags, and sound.
 
-    Контекст:
-    - Автор: @{author}
-    - Опис/Хештеги: {desc}
-    - Назва звуку: {sound}
+    Context:
+    - Author: @{author}
+    - Description/Hashtags: {desc}
+    - Sound Name: {sound}
 
-    ПРАВИЛА:
-    1. interests/hobbies: тільки прямі факти ("танці", "програмування").
-    2. music_taste: тільки якщо відео про музику/кліп.
-    3. relations: тільки якщо про стосунки/сім'ю/дружбу.
-    4. summary: 1–2 слова ("гумор", "мотивація").
+    RULES:
+    1. interests/hobbies: direct facts only ("dancing", "programming").
+    2. music_taste: only if the video is about music/clip.
+    3. relations: only if it's about relationships/family/friendship.
+    4. summary: 1-2 words ("humor", "motivation").
 
-    JSON (українською):
+    JSON (in English):
     {{
-      "interests": "тег1, тег2",
+      "interests": "tag1, tag2",
       "hobbies": "",
       "relations": "",
       "music_taste": "",
-      "summary": "категорія"
+      "summary": "category"
     }}
     """
 
@@ -93,7 +93,7 @@ def analyze_repost_fallback(data: dict) -> tuple[str, dict] | None:
     try:
         return v_id, json.loads(raw["response"])
     except (json.JSONDecodeError, KeyError) as exc:
-        logger.error("Розпарсити відповідь для %s не вдалося: %s", v_id, exc)
+        logger.error("Failed to parse response for %s: %s", v_id, exc)
         return None
 
 
@@ -105,14 +105,14 @@ def main(max_workers: int = 3, db_path: str = "osint_unknown.db") -> None:
     ).fetchall()
 
     if not rows:
-        logger.info("Немає залишкових відео для базового аналізу.")
+        logger.info("No remaining videos for basic analysis.")
         conn.close()
         return
 
-    logger.info("Базовий аналіз %d відео у %d потоках...", len(rows), max_workers)
+    logger.info("Basic analysis of %d videos in %d threads...", len(rows), max_workers)
     tasks = [dict(row) for row in rows]
 
-    # Збираємо результати по мірі готовності (не тримаємо всі у RAM одночасно)
+    # Collect results as they are ready (do not keep all in RAM at the same time)
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
         futures = {ex.submit(analyze_repost_fallback, t): t["video_id"] for t in tasks}
         for future in concurrent.futures.as_completed(futures):
@@ -121,7 +121,7 @@ def main(max_workers: int = 3, db_path: str = "osint_unknown.db") -> None:
                 continue
             v_id, result = res
             logger.info(
-                "Аналіз %s → %s | %s",
+                "Analysis %s → %s | %s",
                 v_id, result.get("interests", ""), result.get("summary", ""),
             )
             conn.execute(
@@ -145,10 +145,10 @@ def main(max_workers: int = 3, db_path: str = "osint_unknown.db") -> None:
                 ),
             )
             conn.execute("UPDATE reposts SET analyzed = 1 WHERE video_id = ?", (v_id,))
-            conn.commit()   # комітимо по одному — якщо процес впаде, не втратимо вже збережене
+            conn.commit()   # commit one by one — if the process crashes, we won't lose what's already saved
 
     conn.close()
-    logger.info("Базовий аналіз завершено!")
+    logger.info("Basic analysis completed!")
 
 
 if __name__ == "__main__":
