@@ -105,7 +105,7 @@ def classify_contacts(username: str, db_path: str) -> str:
 
 if __name__ == "__main__":
     import argparse
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
+    logging.basicConfig(level=logging.DEBUG, format="%(asctime)s | %(levelname)-7s | %(filename)s:%(lineno)d | %(funcName)s | %(message)s")
     ap = argparse.ArgumentParser(description="Classification of top 5 contacts")
     ap.add_argument("--user", required=True, help="TikTok nickname")
     ap.add_argument("--db",   required=True, help="Path to osint_*.db")

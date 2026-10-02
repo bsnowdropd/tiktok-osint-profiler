@@ -252,7 +252,7 @@ async def run_external_osint(username: str) -> str:
 if __name__ == "__main__":
     import sys
     # logging.basicConfig — only in entry point
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s – %(message)s")
+    logging.basicConfig(level=logging.DEBUG, format="%(asctime)s | %(levelname)-7s | %(filename)s:%(lineno)d | %(funcName)s | %(message)s")
 
     if len(sys.argv) < 2:
         print("Usage: python external_osint.py <username>")

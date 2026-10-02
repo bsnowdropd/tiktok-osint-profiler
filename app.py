@@ -11,6 +11,18 @@ New features (refactoring):
   - check_same_thread=False on all sqlite3.connect() — thread safety
 """
 
+import logging
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s | %(levelname)-7s | %(filename)s:%(lineno)d | %(funcName)s | %(message)s",
+    handlers=[
+        logging.FileHandler("streamlit_app.log", encoding="utf-8"),
+        logging.StreamHandler(),
+    ]
+)
+logger = logging.getLogger(__name__)
+
 import glob
 import json
 import os

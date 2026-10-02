@@ -210,5 +210,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     # logging.basicConfig — тільки в точці входу, не на рівні модуля
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
+    logging.basicConfig(level=logging.DEBUG, format="%(asctime)s | %(levelname)-7s | %(filename)s:%(lineno)d | %(funcName)s | %(message)s")
     main()

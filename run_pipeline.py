@@ -25,8 +25,8 @@ from utils import sanitize_username, db_path_for, report_path_for
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-7s | %(module)s | %(message)s",
+    level=logging.DEBUG,
+    format="%(asctime)s | %(levelname)-7s | %(filename)s:%(lineno)d | %(funcName)s | %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[
         logging.FileHandler("osint_pipeline.log", encoding="utf-8"),

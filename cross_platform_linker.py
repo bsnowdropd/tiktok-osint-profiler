@@ -158,7 +158,7 @@ def save_to_db(db_path: str, found_profiles: dict[str, str]) -> None:
 if __name__ == "__main__":
     import argparse
     import json
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
+    logging.basicConfig(level=logging.DEBUG, format="%(asctime)s | %(levelname)-7s | %(filename)s:%(lineno)d | %(funcName)s | %(message)s")
     ap = argparse.ArgumentParser(description="Search for a username across external platforms")
     ap.add_argument("--user", required=True)
     ap.add_argument("--db",   default=None, help="Save results to osint_*.db")

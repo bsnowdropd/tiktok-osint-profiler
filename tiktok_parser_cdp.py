@@ -375,7 +375,7 @@ def parse_fullscreen_feed(
 
 if __name__ == "__main__":
     import argparse
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+    logging.basicConfig(level=logging.DEBUG, format="%(asctime)s | %(levelname)-7s | %(filename)s:%(lineno)d | %(funcName)s | %(message)s")
     ap = argparse.ArgumentParser(description="TikTok Parser (CDP)")
     ap.add_argument("--user",  required=True, help="TikTok username")
     ap.add_argument("--limit", type=int, default=100)

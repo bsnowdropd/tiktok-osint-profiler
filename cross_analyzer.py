@@ -404,7 +404,7 @@ def _username_from_path(db_path: str) -> str:
 # ══════════════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     import json
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
+    logging.basicConfig(level=logging.DEBUG, format="%(asctime)s | %(levelname)-7s | %(filename)s:%(lineno)d | %(funcName)s | %(message)s")
 
     res = find_shared_reposts()
     print("\n=== STATISTICS ===")

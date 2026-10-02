@@ -13,7 +13,7 @@ import os
 
 from utils import db_path_for, sanitize_username
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s | %(levelname)-7s | %(filename)s:%(lineno)d | %(funcName)s | %(message)s")
 logger = logging.getLogger(__name__)
 
 
